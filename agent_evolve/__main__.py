@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Optional
 from .extract_decorated_tools import DecoratedToolExtractor
 from .extract_commented_evolve import extract_commented_evolve_from_file
+from .generate_training_data import TrainingDataGenerator
+from .config import DEFAULT_DB_PATH
 
 def ensure_db_directory(db_path: str):
     """Ensure the database directory exists."""
@@ -217,6 +219,31 @@ def extract_evolution_targets(search_path: str, output_dir: str):
         print(f"\n⚠️  No evolution targets found in {search_path}")
         print(f"💡 Make sure functions are decorated with @evolve() or have #@evolve() comments")
 
+def generate_training_data(tools_directory: str, num_samples: int, force: bool):
+    """Generate training data for extracted tools."""
+    # Check for OpenAI API key
+    if not os.getenv('OPENAI_API_KEY'):
+        print("❌ Error: OPENAI_API_KEY environment variable is required")
+        print("💡 Please set your OpenAI API key: export OPENAI_API_KEY=your_key_here")
+        return
+    
+    # Validate num_samples
+    if num_samples < 1:
+        print("❌ Error: Number of samples must be at least 1")
+        return
+    
+    if num_samples > 100:
+        print("⚠️  Warning: Generating more than 100 samples per tool may be expensive and slow")
+        response = input("Continue? (y/N): ")
+        if response.lower() != 'y':
+            return
+    
+    # Initialize generator
+    generator = TrainingDataGenerator(num_samples=num_samples)
+    
+    # Generate training data
+    generator.generate_training_data(tools_directory, force=force)
+
 def main():
     parser = argparse.ArgumentParser(
         description="Agent Evolve CLI - Tracking data management",
@@ -227,34 +254,43 @@ def main():
     
     # Analyze command
     analyze_parser = subparsers.add_parser('analyze', help='Analyze tracking data')
-    analyze_parser.add_argument('--db', default='.agent_evolve/data/agent_evolve.db', 
-                               help='Database path (default: .agent_evolve/data/agent_evolve.db)')
+    analyze_parser.add_argument('--db', default=DEFAULT_DB_PATH, 
+                               help=f'Database path (default: {DEFAULT_DB_PATH})')
     analyze_parser.add_argument('--thread-id', help='Filter by thread ID')
     
     # Export command
     export_parser = subparsers.add_parser('export', help='Export tracking data')
-    export_parser.add_argument('--db', default='.agent_evolve/data/agent_evolve.db',
-                              help='Database path (default: .agent_evolve/data/agent_evolve.db)')
+    export_parser.add_argument('--db', default=DEFAULT_DB_PATH,
+                              help=f'Database path (default: {DEFAULT_DB_PATH})')
     export_parser.add_argument('--output', required=True, help='Output file path')
     export_parser.add_argument('--format', choices=['json'], default='json',
                               help='Export format (default: json)')
     
     # Clear command
     clear_parser = subparsers.add_parser('clear', help='Clear all tracking data')
-    clear_parser.add_argument('--db', default='.agent_evolve/data/agent_evolve.db',
-                             help='Database path (default: .agent_evolve/data/agent_evolve.db)')
+    clear_parser.add_argument('--db', default=DEFAULT_DB_PATH,
+                             help=f'Database path (default: {DEFAULT_DB_PATH})')
     clear_parser.add_argument('--yes', action='store_true',
                              help='Skip confirmation prompt')
     
     # Status command
     status_parser = subparsers.add_parser('status', help='Show tracking status')
-    status_parser.add_argument('--db', default='.agent_evolve/data/agent_evolve.db',
-                              help='Database path (default: .agent_evolve/data/agent_evolve.db)')
+    status_parser.add_argument('--db', default=DEFAULT_DB_PATH,
+                              help=f'Database path (default: {DEFAULT_DB_PATH})')
     
     # Extract command
     extract_parser = subparsers.add_parser('extract', help='Extract functions and prompts marked with @evolve()')
     extract_parser.add_argument('--path', default='.', help='Path to search for decorated functions (default: current directory)')
     extract_parser.add_argument('--output-dir', default='.agent_evolve', help='Output directory name (default: .agent_evolve)')
+    
+    # Generate training data command
+    train_parser = subparsers.add_parser('generate-training-data', help='Generate training data for extracted tools')
+    train_parser.add_argument('tools_directory', nargs='?', default='.agent_evolve', 
+                             help='Directory containing tool subdirectories (default: .agent_evolve)')
+    train_parser.add_argument('--num-samples', '-n', type=int, default=10,
+                             help='Number of training samples to generate per tool (default: 10)')
+    train_parser.add_argument('--force', '-f', action='store_true',
+                             help='Force regeneration of existing training data')
     
     args = parser.parse_args()
     
@@ -272,6 +308,8 @@ def main():
         analyze_tracking_data(args.db)
     elif args.command == 'extract':
         extract_evolution_targets(args.path, args.output_dir)
+    elif args.command == 'generate-training-data':
+        generate_training_data(args.tools_directory, args.num_samples, args.force)
 
 if __name__ == '__main__':
     main()

@@ -432,11 +432,9 @@ def track_node(**kwargs):
     """
     print(f"🚀 track_node called with kwargs: {kwargs}")
     
-    # Use absolute path for SQLite storage
-    import os
-    data_dir = os.path.join(os.getcwd(), '.agent_evolve', 'data')
-    os.makedirs(data_dir, exist_ok=True)
-    db_path = os.path.join(data_dir, 'agent_evolve.db')
+    # Use configured database path
+    from ..config import get_db_path
+    db_path = get_db_path()
     
     # Create TrackerConfig with SQLite storage
     from .config import TrackerConfig
