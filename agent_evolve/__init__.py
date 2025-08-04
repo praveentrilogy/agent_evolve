@@ -7,4 +7,8 @@ A comprehensive toolkit for evolving and tracking AI agents, including:
 - Tool extraction and optimization utilities
 """
 
+from .evolve_decorator import evolve
+from .tracking.decorator import track_node
+
 __version__ = "0.1.0"
+__all__ = ['evolve', 'track_node']

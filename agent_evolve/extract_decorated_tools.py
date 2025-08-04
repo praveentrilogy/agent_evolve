@@ -599,8 +599,10 @@ if __name__ == "__main__":
                     import_map[alias.name.split('.')[0]] = import_stmt
                     
             elif isinstance(node, ast.ImportFrom):
-                # Skip decorator imports in standalone tools
-                if node.module and 'evolve_decorator' in node.module:
+                # Skip old evolution decorator imports in standalone tools
+                if node.module and ('evolve_decorator' in node.module or 
+                                  node.module == 'evolution.decorators' or
+                                  'evolution.decorators' in str(node.module)):
                     continue
                 import_stmt = ast.unparse(node)
                 all_imports.append(import_stmt)
@@ -633,6 +635,9 @@ if __name__ == "__main__":
                     if common in imp:
                         needed_imports.add(imp)
                         break
+        
+        # Add the evolve decorator import for extracted tools
+        needed_imports.add('from agent_evolve import evolve')
         
         # Sort and return unique imports
         final_imports = sorted(list(needed_imports))

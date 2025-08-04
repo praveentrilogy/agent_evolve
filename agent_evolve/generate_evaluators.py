@@ -23,11 +23,14 @@ class EvaluatorGenerator:
     """Generates OpenEvolve evaluators for agent tools using LLM"""
     
     def __init__(self, model_name: str = "gpt-4o"):
+        # Use higher token limits for models that support it
+        max_tokens = 16000 if "gpt-4o" in model_name else 8000
+        
         self.model = ChatOpenAI(
             model=model_name, 
             temperature=0.0,
-            max_tokens=4000,  # Ensure we get complete responses
-            timeout=60
+            max_tokens=max_tokens,
+            timeout=120
         )
         self.tools_dir = Path("evolution/tools")
     
@@ -333,6 +336,12 @@ CRITICAL: Address all the issues mentioned above in your new implementation.
             # Validate the code has essential components
             if 'def evaluate(' not in evaluator_code:
                 print("ERROR: Generated code missing 'def evaluate(' function")
+                print(f"Code length: {len(evaluator_code)} characters")
+                if len(evaluator_code) < 2000:
+                    print("This suggests the LLM response was truncated. Try:")
+                    print("1. Using a different model (gpt-4o-mini has higher token limits)")
+                    print("2. Simplifying the tool function")
+                    print("3. Reducing the number of metrics")
                 return None
             
             if 'return' not in evaluator_code:

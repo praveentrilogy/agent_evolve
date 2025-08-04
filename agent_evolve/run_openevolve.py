@@ -171,6 +171,23 @@ def list_available_tools(tools_base_dir: str = "evolution/tools"):
     for item in tools_path.iterdir():
         if not item.is_dir():
             continue
+        
+        # Skip common non-tool directories
+        skip_dirs = {'db', 'data', '__pycache__', '.git', 'logs', 'output', 'checkpoints', 'temp', 'tmp'}
+        if item.name in skip_dirs:
+            continue
+        
+        # Skip directories that don't have any tool-related files at all
+        has_any_tool_file = any([
+            (item / 'evolve_target.py').exists(),
+            (item / 'evaluator.py').exists(),
+            (item / 'openevolve_config.yaml').exists(),
+            (item / 'training_data.json').exists(),
+            (item / 'metadata.json').exists()
+        ])
+        
+        if not has_any_tool_file:
+            continue
             
         # Check for required files
         has_tool = (item / 'evolve_target.py').exists()

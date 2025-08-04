@@ -7,12 +7,16 @@ import sys
 import os
 import sqlite3
 import json
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from .extract_decorated_tools import DecoratedToolExtractor
 from .extract_commented_evolve import extract_commented_evolve_from_file
 from .generate_training_data import TrainingDataGenerator
+from .generate_evaluators import EvaluatorGenerator
+from .generate_openevolve_configs import OpenEvolveConfigGenerator
+from .run_openevolve import run_openevolve_for_tool, list_available_tools
 from .config import DEFAULT_DB_PATH
 
 def ensure_db_directory(db_path: str):
@@ -244,6 +248,281 @@ def generate_training_data(tools_directory: str, num_samples: int, force: bool):
     # Generate training data
     generator.generate_training_data(tools_directory, force=force)
 
+def generate_evaluators(tools_directory: str, model_name: str = "gpt-4o"):
+    """Generate evaluators for extracted tools."""
+    # Check for OpenAI API key
+    if not os.getenv('OPENAI_API_KEY'):
+        print("❌ Error: OPENAI_API_KEY environment variable is required")
+        print("💡 Please set your OpenAI API key: export OPENAI_API_KEY=your_key_here")
+        return
+    
+    # Initialize generator with specified model
+    generator = EvaluatorGenerator(model_name=model_name)
+    
+    # Generate evaluators
+    generator.generate_evaluators(tools_directory)
+
+def generate_openevolve_configs(tools_directory: str):
+    """Generate OpenEvolve configuration files for extracted tools."""
+    # Initialize generator
+    generator = OpenEvolveConfigGenerator(tools_directory)
+    
+    # Generate configs
+    try:
+        generator.generate_configs()
+    except Exception as e:
+        print(f"❌ Error generating configs: {e}")
+        import traceback
+        traceback.print_exc()
+
+async def run_openevolve(tool_name: str, checkpoint: int = None, list_tools: bool = False, base_dir: str = ".agent_evolve"):
+    """Run OpenEvolve for a specific tool by name."""
+    if list_tools:
+        list_available_tools(base_dir)
+        return
+    
+    if not tool_name:
+        print("❌ Error: Please provide a tool name")
+        print("💡 Use --list to see available tools")
+        return
+    
+    # Construct the full tool directory path
+    tool_directory = os.path.join(base_dir, tool_name)
+    
+    # Check if the tool directory exists
+    if not os.path.exists(tool_directory):
+        print(f"❌ Error: Tool '{tool_name}' not found in {base_dir}")
+        print("💡 Available tools:")
+        list_available_tools(base_dir)
+        return
+    
+    # Check for OpenAI API key
+    if not os.getenv('OPENAI_API_KEY'):
+        print("❌ Error: OPENAI_API_KEY environment variable is required")
+        print("💡 Please set your OpenAI API key: export OPENAI_API_KEY=your_key_here")
+        return
+    
+    print(f"🚀 Running OpenEvolve for tool: {tool_name}")
+    print(f"📁 Tool path: {tool_directory}")
+    
+    # Run OpenEvolve for the specified tool
+    success = await run_openevolve_for_tool(tool_directory, checkpoint)
+    
+    if success:
+        print(f"\n🎉 OpenEvolve optimization completed for {tool_name}!")
+    else:
+        print(f"\n❌ OpenEvolve optimization failed for {tool_name}!")
+
+async def run_full_pipeline(tool_name: str, base_dir: str = ".agent_evolve", num_samples: int = 10, 
+                           model_name: str = "gpt-4o", checkpoint: int = None, force_training_data: bool = False):
+    """Run the complete pipeline for a tool: generate training data, evaluator, configs, then run OpenEvolve."""
+    
+    # Validate inputs
+    if not tool_name:
+        print("❌ Error: Please provide a tool name")
+        return False
+    
+    # Check for OpenAI API key
+    if not os.getenv('OPENAI_API_KEY'):
+        print("❌ Error: OPENAI_API_KEY environment variable is required")
+        print("💡 Please set your OpenAI API key: export OPENAI_API_KEY=your_key_here")
+        return False
+    
+    # Construct the full tool directory path
+    tool_directory = os.path.join(base_dir, tool_name)
+    
+    # Check if the tool directory exists
+    if not os.path.exists(tool_directory):
+        print(f"❌ Error: Tool '{tool_name}' not found in {base_dir}")
+        print("💡 Available tools:")
+        list_available_tools(base_dir)
+        return False
+    
+    # Check if evolve_target.py exists
+    evolve_target_path = os.path.join(tool_directory, "evolve_target.py")
+    if not os.path.exists(evolve_target_path):
+        print(f"❌ Error: {tool_name}/evolve_target.py not found")
+        print("💡 Make sure the tool was properly extracted first")
+        return False
+    
+    print(f"🚀 Running full pipeline for tool: {tool_name}")
+    print(f"📁 Tool path: {tool_directory}")
+    print(f"🔧 Model: {model_name}, Samples: {num_samples}")
+    print("=" * 60)
+    
+    success = True
+    
+    # Step 1: Generate training data
+    print(f"\n📊 Step 1/4: Generating training data...")
+    try:
+        generator = TrainingDataGenerator(num_samples=num_samples)
+        generator.generate_training_data(base_dir, force=force_training_data)
+        print("✅ Training data generation completed")
+    except Exception as e:
+        print(f"❌ Training data generation failed: {e}")
+        success = False
+    
+    # Step 2: Generate evaluator (only if step 1 succeeded)
+    if success:
+        print(f"\n⚖️  Step 2/4: Generating evaluator...")
+        try:
+            evaluator_generator = EvaluatorGenerator(model_name=model_name)
+            evaluator_generator.generate_evaluators(base_dir)
+            print("✅ Evaluator generation completed")
+        except Exception as e:
+            print(f"❌ Evaluator generation failed: {e}")
+            success = False
+    
+    # Step 3: Generate OpenEvolve config (only if step 2 succeeded)
+    if success:
+        print(f"\n⚙️  Step 3/4: Generating OpenEvolve config...")
+        try:
+            config_generator = OpenEvolveConfigGenerator(base_dir)
+            config_generator.generate_configs()
+            print("✅ Config generation completed")
+        except Exception as e:
+            print(f"❌ Config generation failed: {e}")
+            success = False
+    
+    # Step 4: Run OpenEvolve optimization (only if all previous steps succeeded)
+    if success:
+        print(f"\n🧬 Step 4/4: Running OpenEvolve optimization...")
+        try:
+            evolve_success = await run_openevolve_for_tool(tool_directory, checkpoint)
+            if evolve_success:
+                print("✅ OpenEvolve optimization completed")
+            else:
+                print("❌ OpenEvolve optimization failed")
+                success = False
+        except Exception as e:
+            print(f"❌ OpenEvolve optimization failed: {e}")
+            success = False
+    
+    # Final summary
+    print("\n" + "=" * 60)
+    if success:
+        print(f"🎉 Full pipeline completed successfully for {tool_name}!")
+        print(f"📈 Your optimized tool should be ready in {tool_directory}/openevolve_output/")
+    else:
+        print(f"💥 Pipeline failed for {tool_name}")
+        print(f"💡 Check the error messages above and try running individual steps")
+    
+    return success
+
+def extract_best_versions(base_dir: str = ".agent_evolve"):
+    """Extract best evolved versions from OpenEvolve outputs and save as best_version.py."""
+    base_path = Path(base_dir)
+    
+    if not base_path.exists():
+        print(f"❌ Directory {base_dir} does not exist")
+        return
+    
+    print(f"🔍 Scanning for evolved tools in: {base_path}")
+    print("=" * 60)
+    
+    extracted_count = 0
+    failed_count = 0
+    
+    # Find all tool directories
+    for tool_dir in base_path.iterdir():
+        if not tool_dir.is_dir():
+            continue
+        
+        # Skip non-tool directories
+        skip_dirs = {'db', 'data', '__pycache__', '.git', 'logs', 'output', 'checkpoints', 'temp', 'tmp'}
+        if tool_dir.name in skip_dirs:
+            continue
+        
+        # Check if this tool has OpenEvolve output
+        openevolve_output = tool_dir / "openevolve_output"
+        if not openevolve_output.exists():
+            continue
+        
+        print(f"\n📁 Processing tool: {tool_dir.name}")
+        
+        # Look for the best program in the openevolve_output/best directory
+        best_dir = openevolve_output / "best"
+        if not best_dir.exists():
+            print(f"  ⚠️  No best directory found")
+            failed_count += 1
+            continue
+        
+        best_program_file = best_dir / "best_program.py"
+        if not best_program_file.exists():
+            print(f"  ⚠️  No best_program.py found")
+            failed_count += 1
+            continue
+        
+        # Read the best program
+        try:
+            with open(best_program_file, 'r') as f:
+                best_code = f.read()
+            
+            # Read metadata if available
+            metadata_file = best_dir / "best_program_info.json"
+            metadata = {}
+            if metadata_file.exists():
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+            
+            # Create the best_version.py file
+            best_version_file = tool_dir / "best_version.py"
+            
+            # Add header with evolution info
+            header = f'''"""
+Best Evolved Version of {tool_dir.name}
+
+Generated by OpenEvolve optimization
+'''
+            
+            if metadata:
+                metrics = metadata.get('metrics', {})
+                if metrics:
+                    header += f"""
+Evolution Metrics:
+"""
+                    for metric, value in metrics.items():
+                        header += f"- {metric}: {value:.4f}\n"
+                
+                generation = metadata.get('generation')
+                if generation is not None:
+                    header += f"- Generation: {generation}\n"
+                
+                iteration = metadata.get('iteration')
+                if iteration is not None:
+                    header += f"- Iteration: {iteration}\n"
+            
+            header += '"""\n\n'
+            
+            # Write the best version file
+            with open(best_version_file, 'w') as f:
+                f.write(header + best_code)
+            
+            print(f"  ✅ Extracted to: best_version.py")
+            if metadata.get('metrics'):
+                metrics_str = ", ".join([f"{k}={v:.3f}" for k, v in metadata['metrics'].items()])
+                print(f"     Metrics: {metrics_str}")
+            
+            extracted_count += 1
+            
+        except Exception as e:
+            print(f"  ❌ Error extracting best version: {e}")
+            failed_count += 1
+    
+    # Summary
+    print("\n" + "=" * 60)
+    if extracted_count > 0:
+        print(f"🎉 Successfully extracted {extracted_count} best versions!")
+        print(f"📁 Best versions saved as 'best_version.py' in each tool directory")
+    else:
+        print(f"⚠️  No best versions found to extract")
+    
+    if failed_count > 0:
+        print(f"⚠️  Failed to extract {failed_count} tools")
+        print(f"💡 Make sure tools have been evolved with OpenEvolve first")
+    
+    return extracted_count
+
 def main():
     parser = argparse.ArgumentParser(
         description="Agent Evolve CLI - Tracking data management",
@@ -292,6 +571,48 @@ def main():
     train_parser.add_argument('--force', '-f', action='store_true',
                              help='Force regeneration of existing training data')
     
+    # Generate evaluators command
+    eval_parser = subparsers.add_parser('generate-evaluators', help='Generate evaluators for extracted tools')
+    eval_parser.add_argument('tools_directory', nargs='?', default='.agent_evolve',
+                            help='Directory containing tool subdirectories (default: .agent_evolve)')
+    eval_parser.add_argument('--model', default='gpt-4o',
+                            help='LLM model to use for generation (default: gpt-4o)')
+    
+    # Generate OpenEvolve configs command
+    config_parser = subparsers.add_parser('generate-configs', help='Generate OpenEvolve configuration files for extracted tools')
+    config_parser.add_argument('tools_directory', nargs='?', default='.agent_evolve',
+                              help='Directory containing tool subdirectories (default: .agent_evolve)')
+    
+    # Run OpenEvolve command
+    evolve_parser = subparsers.add_parser('run-openevolve', help='Run OpenEvolve optimization for a specific tool')
+    evolve_parser.add_argument('tool_name', nargs='?', default=None,
+                              help='Name of the tool to optimize (looks in .agent_evolve directory)')
+    evolve_parser.add_argument('--checkpoint', '-c', type=int, default=None,
+                              help='Resume from specific checkpoint number')
+    evolve_parser.add_argument('--list', '-l', action='store_true',
+                              help='List available tools with their readiness status')
+    evolve_parser.add_argument('--base-dir', default='.agent_evolve',
+                              help='Base directory to look for tools (default: .agent_evolve)')
+    
+    # Full pipeline command
+    pipeline_parser = subparsers.add_parser('evolve', help='Run complete evolution pipeline: generate data, evaluator, configs, then optimize')
+    pipeline_parser.add_argument('tool_name', help='Name of the tool to evolve')
+    pipeline_parser.add_argument('--base-dir', default='.agent_evolve',
+                                help='Base directory to look for tools (default: .agent_evolve)')
+    pipeline_parser.add_argument('--num-samples', '-n', type=int, default=10,
+                                help='Number of training samples to generate (default: 10)')
+    pipeline_parser.add_argument('--model', default='gpt-4o',
+                                help='LLM model to use for generation (default: gpt-4o)')
+    pipeline_parser.add_argument('--checkpoint', '-c', type=int, default=None,
+                                help='Resume OpenEvolve from specific checkpoint number')
+    pipeline_parser.add_argument('--force-training-data', '-f', action='store_true',
+                                help='Force regeneration of existing training data')
+    
+    # Extract best versions command
+    extract_parser = subparsers.add_parser('extract-best', help='Extract best evolved versions as best_version.py files')
+    extract_parser.add_argument('--base-dir', default='.agent_evolve',
+                               help='Base directory to look for evolved tools (default: .agent_evolve)')
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -310,6 +631,17 @@ def main():
         extract_evolution_targets(args.path, args.output_dir)
     elif args.command == 'generate-training-data':
         generate_training_data(args.tools_directory, args.num_samples, args.force)
+    elif args.command == 'generate-evaluators':
+        generate_evaluators(args.tools_directory, args.model)
+    elif args.command == 'generate-configs':
+        generate_openevolve_configs(args.tools_directory)
+    elif args.command == 'run-openevolve':
+        asyncio.run(run_openevolve(args.tool_name, args.checkpoint, args.list, args.base_dir))
+    elif args.command == 'evolve':
+        asyncio.run(run_full_pipeline(args.tool_name, args.base_dir, args.num_samples, 
+                                     args.model, args.checkpoint, args.force_training_data))
+    elif args.command == 'extract-best':
+        extract_best_versions(args.base_dir)
 
 if __name__ == '__main__':
     main()
