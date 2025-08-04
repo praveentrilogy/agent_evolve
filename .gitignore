@@ -1,0 +1,4 @@
+.agent_evolve/
+.claude/
+agent_evolve.egg-info/
+__pycache__/
