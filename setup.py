@@ -28,9 +28,15 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=[
-        # Add any required dependencies here
-        # "langchain-openai>=0.1.0",
-        # "openevolve>=1.0.0",
+        "streamlit>=1.28.0",
+        "plotly>=5.0.0",
+        "pandas>=1.3.0",
+        "openai>=1.0.0",
+        "openevolve>=0.1.0",
+        "langchain-openai>=0.1.0",
+        "langchain-core>=0.1.0",
+        "python-dotenv>=0.19.0",
+        "yfinance>=0.2.0",
     ],
     extras_require={
         "dev": [

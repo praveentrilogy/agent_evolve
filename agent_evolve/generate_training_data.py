@@ -34,8 +34,8 @@ class TrainingDataGenerator:
         self.num_samples = num_samples
         self.tools_dir = Path("evolution/tools")
     
-    def generate_training_data(self, tools_directory: str = None, force: bool = False):
-        """Generate training data for all tools in the directory"""
+    def generate_training_data(self, tools_directory: str = None, force: bool = False, specific_tool: str = None):
+        """Generate training data for all tools in the directory or a specific tool"""
         if tools_directory:
             self.tools_dir = Path(tools_directory)
         
@@ -48,8 +48,17 @@ class TrainingDataGenerator:
         if force:
             print(f"Force mode: Will overwrite existing training data")
         
-        # Find all tool directories
-        tool_dirs = [d for d in self.tools_dir.iterdir() if d.is_dir() and (d / "evolve_target.py").exists()]
+        # Find tool directories
+        if specific_tool:
+            # Generate for specific tool only
+            tool_dir = self.tools_dir / specific_tool
+            if not tool_dir.exists() or not (tool_dir / "evolve_target.py").exists():
+                print(f"Error: Tool '{specific_tool}' not found or missing evolve_target.py")
+                return
+            tool_dirs = [tool_dir]
+        else:
+            # Find all tool directories
+            tool_dirs = [d for d in self.tools_dir.iterdir() if d.is_dir() and (d / "evolve_target.py").exists()]
         
         if not tool_dirs:
             print("No tool directories found")

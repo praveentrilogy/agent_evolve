@@ -126,6 +126,39 @@ def export_data(db_path: str, output_file: str, format: str = 'json'):
     finally:
         conn.close()
 
+def run_dashboard(base_dir: str = ".agent_evolve", port: int = 8501, host: str = "localhost"):
+    """Launch the Streamlit dashboard for visualizing evolution results."""
+    try:
+        import streamlit.web.cli as stcli
+        import sys
+        from pathlib import Path
+        
+        # Get the dashboard script path
+        dashboard_script = Path(__file__).parent / "dashboard.py"
+        
+        if not dashboard_script.exists():
+            print("❌ Dashboard script not found")
+            return
+        
+        print(f"🚀 Starting Agent Evolve Dashboard...")
+        print(f"📁 Base directory: {base_dir}")
+        print(f"🌐 Server: http://{host}:{port}")
+        print(f"💡 Press Ctrl+C to stop the server")
+        
+        # Set environment variable for base directory
+        import os
+        os.environ['AGENT_EVOLVE_BASE_DIR'] = base_dir
+        
+        # Launch Streamlit
+        sys.argv = ["streamlit", "run", str(dashboard_script), "--server.port", str(port), "--server.address", host]
+        stcli.main()
+        
+    except ImportError:
+        print("❌ Error: Streamlit is not installed")
+        print("💡 Install it with: pip install streamlit plotly")
+    except Exception as e:
+        print(f"❌ Error starting dashboard: {e}")
+
 def clear_data(db_path: str, confirm: bool = False):
     """Clear all tracking data."""
     ensure_db_directory(db_path)
@@ -223,7 +256,7 @@ def extract_evolution_targets(search_path: str, output_dir: str):
         print(f"\n⚠️  No evolution targets found in {search_path}")
         print(f"💡 Make sure functions are decorated with @evolve() or have #@evolve() comments")
 
-def generate_training_data(tools_directory: str, num_samples: int, force: bool):
+def generate_training_data(tool_name: str, base_dir: str, num_samples: int, force: bool):
     """Generate training data for extracted tools."""
     # Check for OpenAI API key
     if not os.getenv('OPENAI_API_KEY'):
@@ -245,8 +278,28 @@ def generate_training_data(tools_directory: str, num_samples: int, force: bool):
     # Initialize generator
     generator = TrainingDataGenerator(num_samples=num_samples)
     
-    # Generate training data
-    generator.generate_training_data(tools_directory, force=force)
+    if tool_name:
+        # Generate for specific tool
+        tool_directory = os.path.join(base_dir, tool_name)
+        if not os.path.exists(tool_directory):
+            print(f"❌ Error: Tool '{tool_name}' not found in {base_dir}")
+            return
+        
+        # Check if evolve_target.py exists
+        evolve_target = os.path.join(tool_directory, "evolve_target.py")
+        if not os.path.exists(evolve_target):
+            print(f"❌ Error: {tool_name}/evolve_target.py not found")
+            print("💡 Make sure the tool was properly extracted first")
+            return
+        
+        print(f"🎯 Generating training data for: {tool_name}")
+        
+        # Generate training data for single tool (pass the parent directory)
+        generator.generate_training_data(base_dir, force=force, specific_tool=tool_name)
+    else:
+        # Generate for all tools
+        print(f"🎯 Generating training data for all tools in: {base_dir}")
+        generator.generate_training_data(base_dir, force=force)
 
 def generate_evaluators(tools_directory: str, model_name: str = "gpt-4o"):
     """Generate evaluators for extracted tools."""
@@ -386,7 +439,7 @@ async def run_full_pipeline(tool_name: str, base_dir: str = ".agent_evolve", num
     
     # Step 4: Run OpenEvolve optimization (only if all previous steps succeeded)
     if success:
-        print(f"\n🧬 Step 4/4: Running OpenEvolve optimization...")
+        print(f"\n🧬 Step 4/5: Running OpenEvolve optimization...")
         try:
             evolve_success = await run_openevolve_for_tool(tool_directory, checkpoint)
             if evolve_success:
@@ -398,18 +451,155 @@ async def run_full_pipeline(tool_name: str, base_dir: str = ".agent_evolve", num
             print(f"❌ OpenEvolve optimization failed: {e}")
             success = False
     
+    # Step 5: Extract best version (only if step 4 succeeded)
+    if success:
+        print(f"\n🏆 Step 5/5: Extracting best evolved version...")
+        try:
+            # Extract best version for just this tool
+            tool_path = Path(base_dir) / tool_name
+            best_dir = tool_path / "openevolve_output" / "best"
+            
+            if best_dir.exists() and (best_dir / "best_program.py").exists():
+                # Read the best program
+                with open(best_dir / "best_program.py", 'r') as f:
+                    best_code = f.read()
+                
+                # Read metadata if available
+                metadata_file = best_dir / "best_program_info.json"
+                metadata = {}
+                if metadata_file.exists():
+                    with open(metadata_file, 'r') as f:
+                        metadata = json.load(f)
+                
+                # Create the best_version.py file
+                best_version_file = tool_path / "best_version.py"
+                
+                # Add header with evolution info
+                header = f'''"""
+Best Evolved Version of {tool_name}
+
+Generated by OpenEvolve optimization
+'''
+                
+                if metadata:
+                    metrics = metadata.get('metrics', {})
+                    if metrics:
+                        header += f"""
+Evolution Metrics:
+"""
+                        for metric, value in metrics.items():
+                            header += f"- {metric}: {value:.4f}\n"
+                    
+                    generation = metadata.get('generation')
+                    if generation is not None:
+                        header += f"- Generation: {generation}\n"
+                    
+                    iteration = metadata.get('iteration')
+                    if iteration is not None:
+                        header += f"- Iteration: {iteration}\n"
+                
+                header += '"""\n\n'
+                
+                # Write the best version file
+                with open(best_version_file, 'w') as f:
+                    f.write(header + best_code)
+                
+                print("✅ Best version extracted to: best_version.py")
+                if metadata.get('metrics'):
+                    metrics_str = ", ".join([f"{k}={v:.3f}" for k, v in metadata['metrics'].items()])
+                    print(f"   Metrics: {metrics_str}")
+                
+                # Generate score comparison
+                print("📊 Generating score comparison...")
+                try:
+                    original_scores, best_scores = await _evaluate_both_versions(tool_path, tool_name)
+                    
+                    if original_scores and best_scores:
+                        comparison_data = {
+                            "tool_name": tool_name,
+                            "evaluation_date": datetime.utcnow().isoformat(),
+                            "original_version": {
+                                "scores": original_scores,
+                                "average": sum(original_scores.values()) / len(original_scores)
+                            },
+                            "best_version": {
+                                "scores": best_scores,
+                                "average": sum(best_scores.values()) / len(best_scores)
+                            },
+                            "improvements": {
+                                metric: best_scores[metric] - original_scores.get(metric, 0)
+                                for metric in best_scores.keys()
+                            }
+                        }
+                        
+                        # Save comparison
+                        comparison_file = tool_path / "score_comparison.json"
+                        with open(comparison_file, 'w') as f:
+                            json.dump(comparison_data, f, indent=2)
+                        
+                        print("✅ Score comparison saved to: score_comparison.json")
+                        
+                        # Show improvement summary
+                        avg_improvement = comparison_data["best_version"]["average"] - comparison_data["original_version"]["average"]
+                        print(f"📈 Average improvement: {avg_improvement:+.3f}")
+                        
+                except Exception as e:
+                    print(f"⚠️  Could not generate score comparison: {e}")
+                    
+            else:
+                print("⚠️  No best version found to extract")
+                
+        except Exception as e:
+            print(f"⚠️  Warning: Could not extract best version: {e}")
+            # Don't fail the whole pipeline for this step
+    
     # Final summary
     print("\n" + "=" * 60)
     if success:
         print(f"🎉 Full pipeline completed successfully for {tool_name}!")
-        print(f"📈 Your optimized tool should be ready in {tool_directory}/openevolve_output/")
+        print(f"📈 Your optimized tool is ready in {tool_directory}/best_version.py")
+        print(f"📁 Full evolution results: {tool_directory}/openevolve_output/")
     else:
         print(f"💥 Pipeline failed for {tool_name}")
         print(f"💡 Check the error messages above and try running individual steps")
     
     return success
 
-def extract_best_versions(base_dir: str = ".agent_evolve"):
+async def _evaluate_both_versions(tool_path: Path, tool_name: str):
+    """Get scores from OpenEvolve checkpoint data."""
+    try:
+        openevolve_output = tool_path / "openevolve_output"
+        if not openevolve_output.exists():
+            return None, None
+        
+        # Get original version scores (from initial checkpoint_0)
+        original_scores = None
+        checkpoint_0 = openevolve_output / "checkpoints" / "checkpoint_0" / "programs"
+        if checkpoint_0.exists():
+            # Find the original program (usually the parent/seed program)
+            for program_file in checkpoint_0.glob("*.json"):
+                with open(program_file, 'r') as f:
+                    program_data = json.load(f)
+                    if program_data.get('parent_id') is None or program_data.get('generation', 0) == 0:
+                        # This is likely the original/seed program
+                        original_scores = program_data.get('metrics', {})
+                        break
+        
+        # Get best version scores from the best directory
+        best_scores = None
+        best_info_file = openevolve_output / "best" / "best_program_info.json"
+        if best_info_file.exists():
+            with open(best_info_file, 'r') as f:
+                best_info = json.load(f)
+                best_scores = best_info.get('metrics', {})
+        
+        return original_scores, best_scores
+        
+    except Exception as e:
+        print(f"   Error reading scores from checkpoints: {e}")
+        return None, None
+
+async def extract_best_versions(base_dir: str = ".agent_evolve"):
     """Extract best evolved versions from OpenEvolve outputs and save as best_version.py."""
     base_path = Path(base_dir)
     
@@ -503,6 +693,40 @@ Evolution Metrics:
                 metrics_str = ", ".join([f"{k}={v:.3f}" for k, v in metadata['metrics'].items()])
                 print(f"     Metrics: {metrics_str}")
             
+            # Generate score comparison
+            try:
+                print(f"  📊 Generating score comparison...")
+                original_scores, best_scores = await _evaluate_both_versions(tool_dir, tool_dir.name)
+                
+                if original_scores and best_scores:
+                    comparison_data = {
+                        "tool_name": tool_dir.name,
+                        "evaluation_date": datetime.utcnow().isoformat(),
+                        "original_version": {
+                            "scores": original_scores,
+                            "average": sum(original_scores.values()) / len(original_scores)
+                        },
+                        "best_version": {
+                            "scores": best_scores,
+                            "average": sum(best_scores.values()) / len(best_scores)
+                        },
+                        "improvements": {
+                            metric: best_scores[metric] - original_scores.get(metric, 0)
+                            for metric in best_scores.keys()
+                        }
+                    }
+                    
+                    # Save comparison
+                    comparison_file = tool_dir / "score_comparison.json"
+                    with open(comparison_file, 'w') as f:
+                        json.dump(comparison_data, f, indent=2)
+                    
+                    avg_improvement = comparison_data["best_version"]["average"] - comparison_data["original_version"]["average"]
+                    print(f"     Score comparison: {avg_improvement:+.3f} average improvement")
+                    
+            except Exception as e:
+                print(f"     Warning: Could not generate score comparison: {e}")
+            
             extracted_count += 1
             
         except Exception as e:
@@ -564,8 +788,10 @@ def main():
     
     # Generate training data command
     train_parser = subparsers.add_parser('generate-training-data', help='Generate training data for extracted tools')
-    train_parser.add_argument('tools_directory', nargs='?', default='.agent_evolve', 
-                             help='Directory containing tool subdirectories (default: .agent_evolve)')
+    train_parser.add_argument('tool_name', nargs='?', default=None, 
+                             help='Tool name to generate training data for (e.g., get_fundamental_analysis)')
+    train_parser.add_argument('--base-dir', default='.agent_evolve',
+                             help='Base directory containing tool subdirectories (default: .agent_evolve)')
     train_parser.add_argument('--num-samples', '-n', type=int, default=10,
                              help='Number of training samples to generate per tool (default: 10)')
     train_parser.add_argument('--force', '-f', action='store_true',
@@ -613,6 +839,15 @@ def main():
     extract_parser.add_argument('--base-dir', default='.agent_evolve',
                                help='Base directory to look for evolved tools (default: .agent_evolve)')
     
+    # Dashboard command
+    dashboard_parser = subparsers.add_parser('dashboard', help='Launch the Streamlit dashboard for visualizing evolution results')
+    dashboard_parser.add_argument('--base-dir', default='.agent_evolve',
+                                 help='Base directory to look for evolved tools (default: .agent_evolve)')
+    dashboard_parser.add_argument('--port', type=int, default=8501,
+                                 help='Port to run the dashboard on (default: 8501)')
+    dashboard_parser.add_argument('--host', default='localhost',
+                                 help='Host to run the dashboard on (default: localhost)')
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -630,7 +865,7 @@ def main():
     elif args.command == 'extract':
         extract_evolution_targets(args.path, args.output_dir)
     elif args.command == 'generate-training-data':
-        generate_training_data(args.tools_directory, args.num_samples, args.force)
+        generate_training_data(args.tool_name, args.base_dir, args.num_samples, args.force)
     elif args.command == 'generate-evaluators':
         generate_evaluators(args.tools_directory, args.model)
     elif args.command == 'generate-configs':
@@ -641,7 +876,9 @@ def main():
         asyncio.run(run_full_pipeline(args.tool_name, args.base_dir, args.num_samples, 
                                      args.model, args.checkpoint, args.force_training_data))
     elif args.command == 'extract-best':
-        extract_best_versions(args.base_dir)
+        asyncio.run(extract_best_versions(args.base_dir))
+    elif args.command == 'dashboard':
+        run_dashboard(args.base_dir, args.port, args.host)
 
 if __name__ == '__main__':
     main()
