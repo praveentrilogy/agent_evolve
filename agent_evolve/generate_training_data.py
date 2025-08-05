@@ -207,6 +207,19 @@ FUNCTION CODE:
 
 TASK: Generate {self.num_samples} varied and realistic training examples that represent different real-world use cases.
 
+CRITICAL FORMAT REQUIREMENT:
+Each training example MUST follow this exact structure:
+{{
+    "inputs": {{
+        "<parameter_name>": <parameter_value>,
+        ... (for each function parameter)
+    }},
+    "outputs": <expected_output>
+}}
+
+The "inputs" field MUST contain a dictionary with keys matching the function's parameter names EXACTLY.
+The "outputs" field contains the expected return value of the function.
+
 TRAINING DATA PHILOSOPHY:
 - Focus on VARIETY and DIVERSITY of realistic scenarios
 - Generate examples that represent different types of users, contexts, and use cases
@@ -215,21 +228,23 @@ TRAINING DATA PHILOSOPHY:
 - Prioritize realistic, production-like inputs that users would actually provide
 
 INSTRUCTIONS:
-1. Understand what the function does and who would use it in real life
-2. Generate {self.num_samples} varied input examples representing different realistic scenarios
-3. Each example should represent a different context, industry, style, or use case
-4. For content generation functions, provide diverse, meaningful input contexts
-5. For data processing functions, provide varied but realistic data samples
-6. Make examples representative of actual user needs and scenarios
+1. Extract the function's parameter names from the signature
+2. For each example, create an "inputs" dict with those EXACT parameter names as keys
+3. Include "outputs" field with the expected function output
+4. Each example should represent a different context, industry, style, or use case
+5. Make examples representative of actual user needs and scenarios
 
-IMPORTANT RULES:
-- The inputs must EXACTLY match the function's parameter names and types
-- Do not add extra fields beyond what the function accepts
-- Generate ONLY inputs for content generation functions (essays, guidelines, text, etc.)
-- Provide expected outputs only for deterministic analysis/classification functions
-- Focus on realistic diversity - different industries, contexts, styles, complexity levels
-- Avoid repetitive patterns, empty values, or artificial edge cases
-- Each example should feel like it comes from a different real user scenario
+EXAMPLE for a function like def add(a: int, b: int) -> int:
+[
+    {{"inputs": {{"a": 5, "b": 3}}, "outputs": 8}},
+    {{"inputs": {{"a": 10, "b": 20}}, "outputs": 30}}
+]
+
+EXAMPLE for a function like def generate_fibbonacci_sequence(n: int) -> List[int]:
+[
+    {{"inputs": {{"n": 5}}, "outputs": [0, 1, 1, 2, 3]}},
+    {{"inputs": {{"n": 8}}, "outputs": [0, 1, 1, 2, 3, 5, 8, 13]}}
+]
 
 Generate {self.num_samples} diverse, realistic training examples now.
 Return ONLY a valid JSON array. No explanations, no markdown, just the JSON array."""

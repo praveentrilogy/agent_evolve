@@ -63,7 +63,6 @@ class DecoratedToolExtractor:
                     func_info = self._extract_function_info(obj, file_path, source_code)
                     if func_info:
                         extracted.append(func_info)
-                        # print(f"  ✅ Found decorated function: {func_info['name']}")
                 
                 # Check class methods
                 elif inspect.isclass(obj):
@@ -604,6 +603,11 @@ if __name__ == "__main__":
                                   node.module == 'evolution.decorators' or
                                   'evolution.decorators' in str(node.module)):
                     continue
+                
+                # Skip relative imports like "from .imports import evolve"
+                if node.level > 0:  # This indicates a relative import
+                    continue
+                    
                 import_stmt = ast.unparse(node)
                 all_imports.append(import_stmt)
                 # Map each imported name to this import

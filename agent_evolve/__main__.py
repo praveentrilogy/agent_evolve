@@ -328,7 +328,7 @@ def generate_openevolve_configs(tools_directory: str):
         import traceback
         traceback.print_exc()
 
-async def run_openevolve(tool_name: str, checkpoint: int = None, list_tools: bool = False, base_dir: str = ".agent_evolve"):
+async def run_openevolve(tool_name: str, checkpoint: int = None, list_tools: bool = False, base_dir: str = ".agent_evolve", iterations: int = None):
     """Run OpenEvolve for a specific tool by name."""
     if list_tools:
         list_available_tools(base_dir)
@@ -359,7 +359,10 @@ async def run_openevolve(tool_name: str, checkpoint: int = None, list_tools: boo
     print(f"📁 Tool path: {tool_directory}")
     
     # Run OpenEvolve for the specified tool
-    success = await run_openevolve_for_tool(tool_directory, checkpoint)
+    if checkpoint is not None:
+        success = await run_openevolve_for_tool(tool_directory, checkpoint, iterations)
+    else:
+        success = await run_openevolve_for_tool(tool_directory, iterations=iterations)
     
     if success:
         print(f"\n🎉 OpenEvolve optimization completed for {tool_name}!")
@@ -441,7 +444,10 @@ async def run_full_pipeline(tool_name: str, base_dir: str = ".agent_evolve", num
     if success:
         print(f"\n🧬 Step 4/5: Running OpenEvolve optimization...")
         try:
-            evolve_success = await run_openevolve_for_tool(tool_directory, checkpoint)
+            if checkpoint is not None:
+                evolve_success = await run_openevolve_for_tool(tool_directory, checkpoint)
+            else:
+                evolve_success = await run_openevolve_for_tool(tool_directory)
             if evolve_success:
                 print("✅ OpenEvolve optimization completed")
             else:
@@ -809,8 +815,8 @@ def main():
     config_parser.add_argument('tools_directory', nargs='?', default='.agent_evolve',
                               help='Directory containing tool subdirectories (default: .agent_evolve)')
     
-    # Run OpenEvolve command
-    evolve_parser = subparsers.add_parser('run-openevolve', help='Run OpenEvolve optimization for a specific tool')
+    # Run OpenEvolve command (renamed from run-openevolve to evolve)
+    evolve_parser = subparsers.add_parser('evolve', help='Run OpenEvolve optimization for a specific tool')
     evolve_parser.add_argument('tool_name', nargs='?', default=None,
                               help='Name of the tool to optimize (looks in .agent_evolve directory)')
     evolve_parser.add_argument('--checkpoint', '-c', type=int, default=None,
@@ -819,9 +825,11 @@ def main():
                               help='List available tools with their readiness status')
     evolve_parser.add_argument('--base-dir', default='.agent_evolve',
                               help='Base directory to look for tools (default: .agent_evolve)')
+    evolve_parser.add_argument('--iterations', '-i', type=int, default=None,
+                              help='Number of evolution iterations to run')
     
-    # Full pipeline command
-    pipeline_parser = subparsers.add_parser('evolve', help='Run complete evolution pipeline: generate data, evaluator, configs, then optimize')
+    # Full pipeline command (renamed from evolve to pipeline)
+    pipeline_parser = subparsers.add_parser('pipeline', help='Run complete evolution pipeline: generate data, evaluator, configs, then optimize')
     pipeline_parser.add_argument('tool_name', help='Name of the tool to evolve')
     pipeline_parser.add_argument('--base-dir', default='.agent_evolve',
                                 help='Base directory to look for tools (default: .agent_evolve)')
@@ -870,9 +878,9 @@ def main():
         generate_evaluators(args.tools_directory, args.model)
     elif args.command == 'generate-configs':
         generate_openevolve_configs(args.tools_directory)
-    elif args.command == 'run-openevolve':
-        asyncio.run(run_openevolve(args.tool_name, args.checkpoint, args.list, args.base_dir))
     elif args.command == 'evolve':
+        asyncio.run(run_openevolve(args.tool_name, args.checkpoint, args.list, args.base_dir, args.iterations))
+    elif args.command == 'pipeline':
         asyncio.run(run_full_pipeline(args.tool_name, args.base_dir, args.num_samples, 
                                      args.model, args.checkpoint, args.force_training_data))
     elif args.command == 'extract-best':

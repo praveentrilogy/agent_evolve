@@ -103,8 +103,12 @@ class OpenEvolveConfigGenerator:
             return "utility"
     
     def _extract_evaluator_metrics(self, tool_dir: Path) -> List[str]:
-        """Extract metrics from EVALUATION_METRICS variable in evaluator code"""
+        """Extract metrics from evaluator code by analyzing the evaluate function's return values"""
         evaluator_file = tool_dir / "evaluator.py"
+        
+        if not evaluator_file.exists():
+            print(f"    No evaluator found, using default metrics")
+            return ['correctness']
         
         try:
             with open(evaluator_file, 'r') as f:
@@ -112,43 +116,60 @@ class OpenEvolveConfigGenerator:
             
             import re
             
-            # Look for EVALUATION_METRICS = [...] pattern (new approach)
+            # Look for return statements in the evaluate function that return dictionaries
+            # Pattern: return {<dict content>} or return scores where scores is a dict
+            
+            # Look for all return statements with dictionaries in the evaluate function
+            return_patterns = [
+                r'return\s+{([^}]+)}',  # return {'key': value}
+                r'return\s+([a-zA-Z_][a-zA-Z0-9_]*)',  # return variable_name
+            ]
+            
+            for pattern in return_patterns:
+                return_matches = re.findall(pattern, evaluator_code)
+                for return_content in return_matches:
+                    # Look for dictionary keys in return statements
+                    # Pattern: 'metric_name': value or "metric_name": value
+                    metric_keys = re.findall(r'[\'"]([a-zA-Z_][a-zA-Z0-9_]*)[\'"]:\s*[^,}]+', return_content)
+                    
+                    if metric_keys:
+                        # Remove 'combined_score' if present as it's usually calculated
+                        filtered_metrics = [m for m in metric_keys if m != 'combined_score']
+                        print(f"    Found metrics from return statement: {filtered_metrics}")
+                        return filtered_metrics[:4]  # Limit to 4 for MAP-Elites
+            
+            # Alternative: look for scores dictionary assignments in the function
+            scores_pattern = r'scores\s*=\s*{([^}]+)}'
+            scores_match = re.search(scores_pattern, evaluator_code)
+            
+            if scores_match:
+                scores_content = scores_match.group(1)
+                metric_keys = re.findall(r'[\'"]([a-zA-Z_][a-zA-Z0-9_]*)[\'"]:\s*[^,}]+', scores_content)
+                
+                if metric_keys:
+                    filtered_metrics = [m for m in metric_keys if m != 'combined_score']
+                    print(f"    Found metrics from scores dict: {filtered_metrics}")
+                    return filtered_metrics[:4]
+            
+            # Look for EVALUATION_METRICS as final fallback
             metrics_pattern = r'EVALUATION_METRICS\s*=\s*\[([^\]]+)\]'
             metrics_match = re.search(metrics_pattern, evaluator_code)
             
             if metrics_match:
-                # Extract the content inside the brackets
                 metrics_content = metrics_match.group(1)
-                # Find all quoted strings (metric names) - try both single and double quotes
-                metric_matches = re.findall(r"'([^']+)'", metrics_content)
-                if not metric_matches:
-                    metric_matches = re.findall(r'"([^"]+)"', metrics_content)
+                metric_matches = re.findall(r'[\'"]([^\'\"]+)[\'"]', metrics_content)
                 if metric_matches:
-                    print(f"    Found EVALUATION_METRICS: {metric_matches}")
-                    return metric_matches[:4]  # Limit to 4 for MAP-Elites
-            
-            # Fallback: Look for old METRICS = [...] pattern
-            metrics_pattern_old = r'METRICS\s*=\s*\[([^\]]+)\]'
-            metrics_match_old = re.search(metrics_pattern_old, evaluator_code)
-            
-            if metrics_match_old:
-                # Extract the content inside the brackets
-                metrics_content = metrics_match_old.group(1)
-                # Find all quoted strings (metric names) - try both single and double quotes
-                metric_matches = re.findall(r"'([^']+)'", metrics_content)
-                if not metric_matches:
-                    metric_matches = re.findall(r'"([^"]+)"', metrics_content)
-                if metric_matches:
-                    print(f"    Found METRICS: {metric_matches}")
-                    return metric_matches[:4]  # Limit to 4 for MAP-Elites
+                    filtered_metrics = [m for m in metric_matches if m != 'combined_score']
+                    print(f"    Found EVALUATION_METRICS: {filtered_metrics}")
+                    return filtered_metrics[:4]
             
             # Final fallback
-            print(f"    No metrics variable found, using defaults")
-            return ['quality', 'relevance', 'usefulness', 'clarity']
+            print(f"    Could not extract metrics from evaluator, using default")
+            return ['correctness']
             
         except Exception as e:
             print(f"    Warning: Could not extract metrics from evaluator: {e}")
-            return ['quality', 'relevance', 'usefulness', 'clarity']
+            return ['correctness']
     
     def _create_config_structure(self, tool_name: str, tool_category: str, metrics: List[str]) -> Dict[str, Any]:
         """Create OpenEvolve configuration structure for the tool"""
@@ -249,14 +270,9 @@ class OpenEvolveConfigGenerator:
     
     def _get_feature_dimensions(self, metrics: List[str]) -> List[str]:
         """Use evaluator metrics directly as feature dimensions"""
-        # Use the actual metric names from the evaluator
-        dimensions = metrics[:4] if len(metrics) >= 4 else metrics
-        
-        # Ensure we have at least 2 dimensions for MAP-Elites
-        if len(dimensions) < 2:
-            dimensions.extend(['quality', 'diversity'])
-        
-        return dimensions[:4]  # Limit to 4 dimensions for manageable grid
+        # Use ONLY the actual metric names from the evaluator - don't add extras
+        # OpenEvolve can handle single dimensions
+        return metrics[:4]  # Limit to 4 dimensions for manageable grid
     
     
     def _generate_system_message(self, tool_name: str, tool_category: str, metrics: List[str]) -> str:

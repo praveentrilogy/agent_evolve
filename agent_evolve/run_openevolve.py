@@ -19,9 +19,9 @@ import yaml
 from openevolve import OpenEvolve
 
 
-async def run_openevolve_for_tool(tool_dir: str, checkpoint: int = None):
+async def run_openevolve_for_tool(tool_dir: str, checkpoint: int = 0, iterations: int = None):
     """Run OpenEvolve for a specific tool directory using Python API"""
-    tool_path = Path(tool_dir)
+    tool_path = Path(tool_dir).resolve()
     
     # Validate tool directory
     if not tool_path.exists():
@@ -62,15 +62,21 @@ async def run_openevolve_for_tool(tool_dir: str, checkpoint: int = None):
     
     # Read and validate config
     config_file = required_files['openevolve_config.yaml']
+    
     try:
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
         print(f"✓ Loaded OpenEvolve config from {config_file}")
         
+        # Override iterations if provided
+        if iterations is not None:
+            config['max_iterations'] = iterations
+            print(f"  🔄 Overriding max_iterations with command line value: {iterations}")
+        
         # Display key config details
-        max_iterations = config.get('max_iterations', 1000)
+        max_iterations = config.get('max_iterations', 20)
         population_size = config.get('database', {}).get('population_size', 'unknown')
-        temperature = config.get('llm', {}).get('temperature', 'unknown')
+        temperature = config.get('llm', {}).get('temperature', '0.5')
         
         print(f"  Max iterations: {max_iterations}")
         print(f"  Population size: {population_size}")
@@ -113,9 +119,94 @@ async def run_openevolve_for_tool(tool_dir: str, checkpoint: int = None):
         print("Press Ctrl+C to interrupt if needed.")
         print()
         
-        # Run evolution with optional checkpoint
-        if checkpoint is not None:
-            # Build checkpoint path
+        if checkpoint == 0:
+            print(f"🔄 Running optimization from start with {max_iterations} iterations...")
+            
+            # Run evaluator on initial program to get baseline scores
+            print("📊 Evaluating initial program to establish baseline...")
+            try:
+                import json
+                import subprocess
+                import tempfile
+                
+                # Create a temporary evaluation script
+                eval_script = f'''
+import sys
+import os
+import json
+import logging
+from datetime import datetime
+
+# Setup logging to show evaluator logs
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+# Change to tool directory
+os.chdir(r"{str(tool_path)}")
+
+try:
+    start_time = datetime.now()
+    print(f"[{{start_time.strftime('%H:%M:%S')}}] Starting evaluation of initial program...")
+    
+    # Import evaluator 
+    sys.path.insert(0, r"{str(tool_path)}")
+    from evaluator import evaluate
+    
+    # Run evaluation on the evolve_target.py file directly
+    evolve_target_path = "evolve_target.py"
+    scores = evaluate(evolve_target_path)
+    
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+    print(f"[{{end_time.strftime('%H:%M:%S')}}] Evaluation completed in {{duration:.2f}}s. Scores: {{scores}}")
+    
+    # Save scores
+    with open("initial_score.json", "w") as f:
+        json.dump(scores, f, indent=2)
+    
+    print("SUCCESS:", json.dumps(scores))
+    
+except Exception as e:
+    error_time = datetime.now()
+    print(f"[{{error_time.strftime('%H:%M:%S')}}] ERROR:", str(e))
+    import traceback
+    traceback.print_exc()
+'''
+                
+                # Write and run the evaluation script
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+                    f.write(eval_script)
+                    temp_script = f.name
+                
+                
+                try:
+                    # Run the evaluation script without capturing output so logs show in real-time
+                    print("📊 Running initial evaluation...")
+                    result = subprocess.run([
+                        sys.executable, temp_script
+                    ], cwd=str(tool_path), text=True)
+                    
+                    # Check if initial_score.json was created successfully
+                    initial_score_file = tool_path / "initial_score.json"
+                    if initial_score_file.exists():
+                        with open(initial_score_file, 'r') as f:
+                            initial_scores = json.load(f)
+                        print(f"✅ Initial scores saved to {initial_score_file}")
+                        print(f"📈 Baseline scores: {initial_scores}")
+                    else:
+                        print(f"❌ Evaluation did not complete successfully - no scores file created")
+                        if result.returncode != 0:
+                            print(f"   Exit code: {result.returncode}")
+                
+                finally:
+                    # Clean up temp file
+                    os.unlink(temp_script)
+                        
+            except Exception as e:
+                print(f"⚠️  Could not evaluate initial program: {e}")
+            
+            # Don't pass any checkpoint parameter to ensure initial checkpoint_0 is created
+            best_program = await evolve.run()
+        else:
             checkpoint_dir = tool_path / "openevolve_output" / "checkpoints" / f"checkpoint_{checkpoint}"
             if checkpoint_dir.exists():
                 print(f"🔄 Resuming from checkpoint {checkpoint} at {checkpoint_dir}...")
@@ -134,8 +225,6 @@ async def run_openevolve_for_tool(tool_dir: str, checkpoint: int = None):
                 else:
                     print("  No checkpoints found")
                 return False
-        else:
-            best_program = await evolve.run(iterations=max_iterations)
         
         print(f"\n✅ OpenEvolve completed successfully for {tool_name}!")
         print(f"🏆 Best program generated and saved.")
