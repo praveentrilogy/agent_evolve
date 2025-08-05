@@ -84,6 +84,22 @@ def load_tool_data(base_dir: str = ".agent_evolve") -> Dict:
                 with open(score_comparison, 'r') as f:
                     tool_data['score_comparison'] = json.load(f)
             
+            # Load training data
+            training_data_file = tool_dir / "training_data.json"
+            if training_data_file.exists():
+                with open(training_data_file, 'r') as f:
+                    tool_data['training_data'] = json.load(f)
+            else:
+                tool_data['training_data'] = None
+            
+            # Load evaluator code
+            evaluator_file = tool_dir / "evaluator.py"
+            if evaluator_file.exists():
+                with open(evaluator_file, 'r') as f:
+                    tool_data['evaluator_code'] = f.read()
+            else:
+                tool_data['evaluator_code'] = None
+            
             # Load best program info
             best_info_file = openevolve_output / "best" / "best_program_info.json"
             if best_info_file.exists():
@@ -378,7 +394,7 @@ def main():
     tool_data = evolved_tools[selected_tool]
     
     # Create tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Overview", "🔍 Code Diff", "📊 Metrics", "⏱️ Timeline"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📈 Overview", "📋 Training Data", "🔧 Evaluator", "🔍 Evolved Code", "📊 Metrics", "⏱️ Timeline"])
     
     with tab1:
         st.subheader("Overview")
@@ -414,7 +430,76 @@ def main():
             st.dataframe(scores_df, use_container_width=True)
     
     with tab2:
-        st.subheader("Code Comparison")
+        st.subheader("Training Data")
+        
+        if tool_data['training_data']:
+            # Display training data as a table
+            training_df = pd.DataFrame(tool_data['training_data'])
+            
+            # Flatten nested dictionaries for better display
+            flattened_data = []
+            for i, item in enumerate(tool_data['training_data']):
+                flattened_item = {'Index': i + 1}
+                
+                def flatten_dict(d, prefix=''):
+                    for key, value in d.items():
+                        if isinstance(value, dict):
+                            flatten_dict(value, f"{prefix}{key}.")
+                        else:
+                            flattened_item[f"{prefix}{key}"] = value
+                
+                flatten_dict(item)
+                flattened_data.append(flattened_item)
+            
+            if flattened_data:
+                flattened_df = pd.DataFrame(flattened_data)
+                st.dataframe(flattened_df, use_container_width=True)
+                
+                # Show summary statistics
+                st.subheader("Training Data Summary")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Total Samples", len(tool_data['training_data']))
+                with col2:
+                    st.metric("Columns", len(flattened_df.columns) - 1)  # -1 for Index column
+            else:
+                st.warning("Could not parse training data structure")
+        else:
+            st.warning("No training data available")
+    
+    with tab3:
+        st.subheader("Evaluator Code")
+        
+        if tool_data['evaluator_code']:
+            # Display evaluator code with syntax highlighting
+            st.code(tool_data['evaluator_code'], language='python')
+            
+            # Show code statistics
+            st.subheader("Code Statistics")
+            col1, col2, col3 = st.columns(3)
+            
+            lines = tool_data['evaluator_code'].split('\n')
+            with col1:
+                st.metric("Lines of Code", len(lines))
+            with col2:
+                st.metric("Characters", len(tool_data['evaluator_code']))
+            with col3:
+                # Count functions
+                import re
+                functions = re.findall(r'def\s+\w+', tool_data['evaluator_code'])
+                st.metric("Functions", len(functions))
+            
+            # Show function list
+            if functions:
+                st.subheader("Functions Found")
+                for func in functions:
+                    st.code(func, language='python')
+        else:
+            st.warning("No evaluator code available")
+            st.info("Run evaluator generation first to see the code")
+    
+    with tab4:
+        st.subheader("Evolved Code")
         
         if tool_data['original_code'] and tool_data['best_code']:
             # Diff view selector
@@ -448,7 +533,7 @@ def main():
         else:
             st.warning("Code files not available for comparison")
     
-    with tab3:
+    with tab5:
         st.subheader("Performance Metrics")
         
         if tool_data['score_comparison']:
@@ -465,7 +550,7 @@ def main():
         else:
             st.warning("No metrics data available")
     
-    with tab4:
+    with tab6:
         st.subheader("Evolution Timeline")
         
         if tool_data['checkpoints']:

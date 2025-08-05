@@ -200,29 +200,38 @@ Return ONLY a valid JSON array. No explanations, no markdown, just the JSON arra
     def _generate_function_training_data(self, tool_dir: Path, source_code: str, training_data_file: Path) -> bool:
         """Generate training data for regular functions"""
         
-        prompt = f"""Analyze this Python function and generate high-quality training data.
+        prompt = f"""Analyze this Python function and generate diverse, realistic training data for testing different scenarios.
 
 FUNCTION CODE:
 {source_code}
 
-TASK: Generate {self.num_samples} diverse and realistic training examples for this function.
+TASK: Generate {self.num_samples} varied and realistic training examples that represent different real-world use cases.
+
+TRAINING DATA PHILOSOPHY:
+- Focus on VARIETY and DIVERSITY of realistic scenarios
+- Generate examples that represent different types of users, contexts, and use cases
+- Create meaningful test cases that showcase the function's capabilities across different domains
+- Avoid edge cases, error conditions, or empty/null values unless they represent common real-world scenarios
+- Prioritize realistic, production-like inputs that users would actually provide
 
 INSTRUCTIONS:
-1. Understand what the function does by analyzing its name, parameters, and implementation
-2. Generate {self.num_samples} varied input examples that cover different use cases
-3. Each example should be realistic and test different aspects of the function
-4. For content generation functions (text, code, etc.), generate only inputs, not outputs
-5. For deterministic functions, generate both inputs and expected outputs
-6. Ensure diversity in the examples - avoid repetitive or similar inputs
+1. Understand what the function does and who would use it in real life
+2. Generate {self.num_samples} varied input examples representing different realistic scenarios
+3. Each example should represent a different context, industry, style, or use case
+4. For content generation functions, provide diverse, meaningful input contexts
+5. For data processing functions, provide varied but realistic data samples
+6. Make examples representative of actual user needs and scenarios
 
 IMPORTANT RULES:
-- The inputs must EXACTLY match the function's parameter names
+- The inputs must EXACTLY match the function's parameter names and types
 - Do not add extra fields beyond what the function accepts
-- For functions that generate content (essays, guidelines, etc.), only provide inputs
-- For classification/analysis functions, provide expected outputs if deterministic
-- Make the data realistic and varied
+- Generate ONLY inputs for content generation functions (essays, guidelines, text, etc.)
+- Provide expected outputs only for deterministic analysis/classification functions
+- Focus on realistic diversity - different industries, contexts, styles, complexity levels
+- Avoid repetitive patterns, empty values, or artificial edge cases
+- Each example should feel like it comes from a different real user scenario
 
-Generate {self.num_samples} training examples now.
+Generate {self.num_samples} diverse, realistic training examples now.
 Return ONLY a valid JSON array. No explanations, no markdown, just the JSON array."""
 
         return self._execute_llm_generation(prompt, training_data_file)

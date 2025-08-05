@@ -70,8 +70,142 @@ class EvaluatorGenerator:
             print(f"Error reading tool file: {e}")
             return
 
+    def _fix_common_import_errors(self, code: str) -> str:
+        """Fix common import errors and enforce raw OpenAI API usage"""
+        import re
+        
+        # Replace langchain imports with raw OpenAI
+        code = re.sub(
+            r'from langchain_openai import.*',
+            'import openai',
+            code
+        )
+        code = re.sub(
+            r'from langchain_core\.messages import.*',
+            '',
+            code
+        )
+        
+        # Replace langchain LLM usage with raw OpenAI client
+        code = re.sub(
+            r'ChatOpenAI\([^)]*\)',
+            'openai.OpenAI()',
+            code
+        )
+        
+        # Replace langchain message patterns with raw OpenAI API calls
+        code = re.sub(
+            r'llm\.generate\(\[HumanMessage\(content=([^)]+)\)\]\)',
+            r'client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": \1}])',
+            code
+        )
+        code = re.sub(
+            r'llm\.invoke\(\[HumanMessage\(content=([^)]+)\)\]\)',
+            r'client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": \1}])',
+            code
+        )
+        
+        # Fix response access patterns
+        code = re.sub(
+            r'response\[0\]\.content',
+            'response.choices[0].message.content',
+            code
+        )
+        code = re.sub(
+            r'response\.content',
+            'response.choices[0].message.content',
+            code
+        )
+        
+        return code
 
+    def _validate_evaluator_code(self, code: str) -> bool:
+        """Validate that the evaluator code is syntactically correct and functional"""
+        try:
+            # Check for required function
+            if 'def evaluate(' not in code:
+                print("  Missing 'def evaluate(' function")
+                return False
+            
+            # Check syntax by compiling
+            compile(code, '<string>', 'exec')
+            
+            # Check that evaluate function has a return statement
+            import ast
+            tree = ast.parse(code)
+            
+            # Find the evaluate function
+            evaluate_func = None
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == 'evaluate':
+                    evaluate_func = node
+                    break
+            
+            if not evaluate_func:
+                print("  Could not find evaluate function in AST")
+                return False
+            
+            # Check that evaluate function has at least one return statement
+            has_return = False
+            for node in ast.walk(evaluate_func):
+                if isinstance(node, ast.Return):
+                    has_return = True
+                    break
+            
+            if not has_return:
+                print("  evaluate function has no return statement")
+                return False
+            
+            print("  ✅ Evaluator code validation passed")
+            return True
+            
+        except SyntaxError as e:
+            print(f"  Syntax error in generated code: {e}")
+            return False
+        except Exception as e:
+            print(f"  Validation error: {e}")
+            return False
 
+    def _validate_evaluator_with_llm(self, code: str) -> dict:
+        """Use LLM to validate and potentially fix evaluator code"""
+        validation_prompt = f"""You are a Python code validator. Analyze this evaluator code and check for common issues:
+
+CODE TO VALIDATE:
+```python
+{code}
+```
+
+CHECK FOR THESE ISSUES:
+1. Syntax errors (try compiling the code)
+2. Import errors (wrong imports like 'Message' instead of proper OpenAI API)
+3. API usage errors (using langchain instead of raw OpenAI API)
+4. Missing error handling
+5. Incorrect response parsing
+6. Missing required functions (def evaluate)
+
+RESPONSE FORMAT:
+Return a JSON with:
+- "is_valid": boolean (true if code is correct)
+- "issues": list of strings describing problems found
+- "suggested_fix": string containing corrected code (only if fixable), or null
+
+If the code needs fixing, provide the complete corrected code in suggested_fix.
+Use raw OpenAI API: openai.OpenAI(), client.chat.completions.create(), response.choices[0].message.content
+
+Return ONLY JSON, no explanations."""
+
+        try:
+            response = self.model.invoke([HumanMessage(content=validation_prompt)])
+            result = json.loads(response.content)
+            return result
+        except Exception as e:
+            print(f"LLM validation failed: {e}")
+            # Fallback to basic validation
+            return {
+                "is_valid": self._validate_evaluator_code(code),
+                "issues": ["LLM validation failed, using basic validation"],
+                "suggested_fix": None
+            }
 
     def _analyze_function_and_metrics(self, tool_dir: Path) -> tuple:
         """Use LLM to analyze function and determine relevant metrics"""
@@ -227,7 +361,8 @@ Be specific and choose metrics that truly matter for this function's output qual
             ),
             "required_structure": (
                 "The file must include:",
-                "1. All necessary imports (os, json, logging, re, importlib, etc.)",
+                "1. Standard imports: import os, json, logging, re, importlib.util, openai",
+                "   CRITICAL: DO NOT USE LANGCHAIN. Use raw OpenAI API only.",
                 "2. Logger initialization: logger = logging.getLogger(__name__)",
                 "3. A robust JSON parsing function with this exact signature:",
                 "   def parse_json_response(response_content: str, default_metrics: dict) -> dict:",
@@ -296,14 +431,18 @@ CRITICAL: Address all the issues mentioned above in your new implementation.
         try:
             evaluator_code = response.content
             
-            # Check if response is complete - should be much longer for a full evaluator
-            if len(evaluator_code) < 1000:
-                print(f"WARNING: Response seems too short ({len(evaluator_code)} chars)")
-                print(f"Full response:")
-                print("="*50)
-                print(evaluator_code)
-                print("="*50)
-                return None  # Skip cleanup if response is too short
+            # Fix common import errors in generated code
+            evaluator_code = self._fix_common_import_errors(evaluator_code)
+            
+            # Validate the generated evaluator code
+            validation_result = self._validate_evaluator_with_llm(evaluator_code)
+            if not validation_result['is_valid']:
+                print(f"ERROR: Generated evaluator code is invalid: {validation_result['issues']}")
+                if validation_result['suggested_fix']:
+                    print("Attempting to apply LLM-suggested fix...")
+                    evaluator_code = validation_result['suggested_fix']
+                else:
+                    return None
             
             # SIMPLE cleanup - only remove markdown blocks, don't do aggressive text removal
             original_code = evaluator_code
@@ -334,14 +473,9 @@ CRITICAL: Address all the issues mentioned above in your new implementation.
                 print(f"Cleaned code length: {len(evaluator_code)}")
             
             # Validate the code has essential components
+            # This should not happen due to earlier validation, but just in case
             if 'def evaluate(' not in evaluator_code:
                 print("ERROR: Generated code missing 'def evaluate(' function")
-                print(f"Code length: {len(evaluator_code)} characters")
-                if len(evaluator_code) < 2000:
-                    print("This suggests the LLM response was truncated. Try:")
-                    print("1. Using a different model (gpt-4o-mini has higher token limits)")
-                    print("2. Simplifying the tool function")
-                    print("3. Reducing the number of metrics")
                 return None
             
             if 'return' not in evaluator_code:
