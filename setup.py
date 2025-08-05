@@ -29,6 +29,7 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "streamlit>=1.28.0",
+        "streamlit-ace>=0.1.1",
         "plotly>=5.0.0",
         "pandas>=1.3.0",
         "openai>=1.0.0",

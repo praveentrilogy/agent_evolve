@@ -95,9 +95,15 @@ def load_tool_data(base_dir: str = ".agent_evolve") -> Dict:
             # Load evaluator code
             evaluator_file = tool_dir / "evaluator.py"
             if evaluator_file.exists():
-                with open(evaluator_file, 'r') as f:
-                    tool_data['evaluator_code'] = f.read()
+                try:
+                    with open(evaluator_file, 'r', encoding='utf-8') as f:
+                        tool_data['evaluator_code'] = f.read()
+                    print(f"  ✅ Loaded evaluator code for {tool_name}: {len(tool_data['evaluator_code'])} chars")
+                except Exception as e:
+                    print(f"  ❌ Error loading evaluator for {tool_name}: {e}")
+                    tool_data['evaluator_code'] = None
             else:
+                print(f"  ⚠️  No evaluator.py found for {tool_name}")
                 tool_data['evaluator_code'] = None
             
             # Load best program info
@@ -155,6 +161,58 @@ def create_code_diff_html(original: str, evolved: str) -> str:
             html_lines.append(f'<div style="color: #cf222e; background-color: #ffebe9; padding: 1px 4px;">{line.rstrip()}</div>')
         else:
             html_lines.append(f'<div style="padding: 1px 4px;">{line.rstrip()}</div>')
+    
+    html_lines.append('</div>')
+    return ''.join(html_lines)
+
+def create_code_diff_html_for_display(original: str, evolved: str, show_original: bool = True) -> str:
+    """Create HTML diff with red/green highlighting for side-by-side display"""
+    if not original or not evolved:
+        return "<p>Code not available</p>"
+    
+    original_lines = original.splitlines()
+    evolved_lines = evolved.splitlines()
+    
+    # Use SequenceMatcher to find differences
+    matcher = difflib.SequenceMatcher(None, original_lines, evolved_lines)
+    
+    html_lines = []
+    html_lines.append('<div style="font-family: \'Courier New\', monospace; font-size: 12px; line-height: 1.4; background-color: #f8f9fa; padding: 10px; border-radius: 4px; max-height: 600px; overflow-y: auto;">')
+    
+    if show_original:
+        # Show original code with deletions highlighted in red
+        line_num = 1
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == 'equal':
+                for i in range(i1, i2):
+                    html_lines.append(f'<div style="padding: 1px 4px;"><span style="color: #666; margin-right: 10px; user-select: none;">{line_num:3d}</span><span style="color: #24292e;">{original_lines[i]}</span></div>')
+                    line_num += 1
+            elif tag == 'delete':
+                for i in range(i1, i2):
+                    html_lines.append(f'<div style="background-color: #ffeef0; border-left: 3px solid #d73a49; padding: 1px 4px;"><span style="color: #666; margin-right: 10px; user-select: none;">{line_num:3d}</span><span style="color: #d73a49;"><del>{original_lines[i]}</del></span></div>')
+                    line_num += 1
+            elif tag == 'replace':
+                for i in range(i1, i2):
+                    html_lines.append(f'<div style="background-color: #ffeef0; border-left: 3px solid #d73a49; padding: 1px 4px;"><span style="color: #666; margin-right: 10px; user-select: none;">{line_num:3d}</span><span style="color: #d73a49;"><del>{original_lines[i]}</del></span></div>')
+                    line_num += 1
+            # Skip 'insert' for original view
+    else:
+        # Show evolved code with additions highlighted in green
+        line_num = 1
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == 'equal':
+                for j in range(j1, j2):
+                    html_lines.append(f'<div style="padding: 1px 4px;"><span style="color: #666; margin-right: 10px; user-select: none;">{line_num:3d}</span><span style="color: #24292e;">{evolved_lines[j]}</span></div>')
+                    line_num += 1
+            elif tag == 'insert':
+                for j in range(j1, j2):
+                    html_lines.append(f'<div style="background-color: #e6ffed; border-left: 3px solid #28a745; padding: 1px 4px;"><span style="color: #666; margin-right: 10px; user-select: none;">{line_num:3d}</span><span style="color: #28a745;"><strong>{evolved_lines[j]}</strong></span></div>')
+                    line_num += 1
+            elif tag == 'replace':
+                for j in range(j1, j2):
+                    html_lines.append(f'<div style="background-color: #e6ffed; border-left: 3px solid #28a745; padding: 1px 4px;"><span style="color: #666; margin-right: 10px; user-select: none;">{line_num:3d}</span><span style="color: #28a745;"><strong>{evolved_lines[j]}</strong></span></div>')
+                    line_num += 1
+            # Skip 'delete' for evolved view
     
     html_lines.append('</div>')
     return ''.join(html_lines)
@@ -273,6 +331,257 @@ def display_metrics_chart(score_data: Dict) -> None:
     
     st.plotly_chart(fig, use_container_width=True)
 
+@st.dialog("🤖 Improve Training Data with AI")
+def show_training_data_improvement_modal(selected_tool: str, current_training_data: List[Dict], evaluator_code: str):
+    """Show AI training data improvement modal dialog"""
+    
+    # Check if we have valid training data
+    if not current_training_data:
+        st.error("❌ No training data found. Please generate training data first.")
+        if st.button("Close"):
+            st.rerun()
+        return
+    
+    st.markdown("Describe how you want to improve or expand the training data:")
+    
+    # Show current training data preview
+    with st.expander("Current Training Data Preview", expanded=False):
+        st.json(current_training_data[:3])  # Show first 3 samples
+        st.caption(f"Total samples: {len(current_training_data)}")
+    
+    improvement_instructions = st.text_area(
+        "Improvement instructions:",
+        placeholder="e.g., Add more diverse examples, generate 5 additional samples, focus on edge cases, improve data quality, etc.",
+        height=120,
+        key=f"modal_training_improvement_{selected_tool}"
+    )
+    
+    # Option to specify number of samples
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        action_type = st.radio(
+            "Action:",
+            ["Improve existing data", "Generate additional samples", "Replace with better data"],
+            key=f"training_action_{selected_tool}"
+        )
+    
+    with col2:
+        if action_type == "Generate additional samples":
+            num_additional = st.number_input(
+                "Additional samples:",
+                min_value=1,
+                max_value=20,
+                value=5,
+                key=f"num_additional_{selected_tool}"
+            )
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col2:
+        if st.button("Cancel", key=f"modal_training_cancel_{selected_tool}"):
+            st.rerun()
+    
+    with col1:
+        if st.button("🚀 Generate Improved Training Data", type="primary", key=f"modal_training_submit_{selected_tool}"):
+            if improvement_instructions:
+                with st.spinner("🤖 Generating improved training data..."):
+                    try:
+                        import openai
+                        client = openai.OpenAI()
+                        
+                        # Create training data improvement prompt
+                        if action_type == "Generate additional samples":
+                            action_instruction = f"Generate {num_additional} additional high-quality training samples"
+                        elif action_type == "Replace with better data":
+                            action_instruction = f"Replace the current training data with {len(current_training_data)} better quality samples"
+                        else:
+                            action_instruction = "Improve the existing training data samples"
+                        
+                        training_prompt = f"""You are an expert at creating high-quality training data for AI systems.
+
+CURRENT TRAINING DATA:
+```json
+{json.dumps(current_training_data, indent=2)}
+```
+
+EVALUATOR CODE CONTEXT:
+```python
+{evaluator_code[:1000]}...
+```
+
+USER REQUEST:
+{improvement_instructions}
+
+TASK: {action_instruction}
+
+REQUIREMENTS:
+1. Maintain the same JSON structure as existing data
+2. Ensure data is diverse, realistic, and high-quality
+3. Focus on variety in scenarios, contexts, and use cases
+4. Avoid repetitive patterns or artificial examples
+5. Make sure data is relevant to the evaluator's purpose
+
+For "Generate additional samples": Return ONLY the new samples as a JSON array
+For "Improve existing" or "Replace": Return the complete improved dataset as a JSON array
+
+Return ONLY valid JSON, no explanations or markdown."""
+                        
+                        response = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[{"role": "user", "content": training_prompt}],
+                            temperature=0.7  # Higher temperature for more diverse training data
+                        )
+                        
+                        improved_data_text = response.choices[0].message.content.strip()
+                        
+                        # Clean up any markdown formatting
+                        if improved_data_text.startswith('```json'):
+                            improved_data_text = improved_data_text[7:]
+                        elif improved_data_text.startswith('```'):
+                            improved_data_text = improved_data_text[3:]
+                        if improved_data_text.endswith('```'):
+                            improved_data_text = improved_data_text[:-3]
+                        improved_data_text = improved_data_text.strip()
+                        
+                        # Parse the improved data
+                        improved_data = json.loads(improved_data_text)
+                        
+                        # Handle different action types
+                        if action_type == "Generate additional samples":
+                            final_data = current_training_data + improved_data
+                        else:
+                            final_data = improved_data
+                        
+                        # Debug info
+                        st.info(f"Generated {len(improved_data)} samples. Total: {len(final_data)}")
+                        
+                        # Show a preview of the changes
+                        with st.expander("Preview of Improved Training Data", expanded=True):
+                            if action_type == "Generate additional samples":
+                                st.markdown("**New samples added:**")
+                                st.json(improved_data[:3] if len(improved_data) > 3 else improved_data)
+                            else:
+                                st.markdown("**Improved training data:**")
+                                st.json(final_data[:3] if len(final_data) > 3 else final_data)
+                        
+                        # Store the improved data for display in main tab
+                        st.session_state[f'improved_training_data_{selected_tool}'] = final_data
+                        st.session_state[f'show_training_diff_{selected_tool}'] = True
+                        st.success("✅ Improved training data generated! Check the Training Data tab to see the changes and apply them.")
+                        
+                        # Close modal automatically
+                        st.rerun()
+                        
+                    except json.JSONDecodeError as e:
+                        st.error(f"❌ Error parsing generated JSON: {e}")
+                    except Exception as e:
+                        st.error(f"❌ Error generating improved training data: {e}")
+            else:
+                st.warning("Please provide improvement instructions")
+
+@st.dialog("🤖 Improve Evaluator with AI")
+def show_ai_improvement_modal(selected_tool: str, current_code: str, training_data: List[Dict]):
+    """Show AI improvement modal dialog"""
+    
+    # Check if we have valid code
+    if not current_code:
+        st.error("❌ No evaluator code found. Please generate an evaluator first.")
+        if st.button("Close"):
+            st.rerun()
+        return
+    
+    st.markdown("Describe how you want to improve the evaluator:")
+    
+    # Debug info
+    with st.expander("Current Code Preview (first 500 chars)", expanded=False):
+        preview_code = current_code[:500] + "..." if len(current_code) > 500 else current_code
+        st.code(preview_code, language="python")
+    
+    improvement_instructions = st.text_area(
+        "Improvement instructions:",
+        placeholder="e.g., Make the evaluation more strict, focus on specific aspects, add new metrics, fix errors, etc.",
+        height=120,
+        key=f"modal_improvement_instructions_{selected_tool}"
+    )
+    
+    col1, col2 = st.columns([3, 1])
+    
+    with col2:
+        if st.button("Cancel", key=f"modal_cancel_{selected_tool}"):
+            st.rerun()
+    
+    with col1:
+        if st.button("🚀 Generate Improved Evaluator", type="primary", key=f"modal_submit_{selected_tool}"):
+            if improvement_instructions:
+                with st.spinner("🤖 Generating improved evaluator..."):
+                    try:
+                        import openai
+                        client = openai.OpenAI()
+                        
+                        # Create improvement prompt
+                        improvement_prompt = f"""You are an expert Python developer improving an OpenEvolve evaluator.
+
+CURRENT EVALUATOR CODE:
+```python
+{current_code}
+```
+
+TRAINING DATA SAMPLES (first 3):
+```json
+{json.dumps(training_data[:3] if training_data else [], indent=2)}
+```
+
+USER IMPROVEMENT REQUEST:
+{improvement_instructions}
+
+REQUIREMENTS:
+1. The evaluator MUST have this exact function signature: def evaluate(program) -> dict:
+2. Use raw OpenAI API (openai.OpenAI()), NOT langchain
+3. Include robust JSON parsing with error handling
+4. Return a dictionary with metric scores between 0.0 and 1.0
+5. Apply the user's improvement instructions while maintaining functionality
+6. Include proper error handling and logging
+
+Generate the complete improved evaluator code.
+Return ONLY Python code, no explanations or markdown."""
+                        
+                        response = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=[{"role": "user", "content": improvement_prompt}],
+                            temperature=0.3
+                        )
+                        
+                        improved_code = response.choices[0].message.content.strip()
+                        
+                        # Clean up any markdown formatting
+                        if improved_code.startswith('```python'):
+                            improved_code = improved_code[9:]
+                        elif improved_code.startswith('```'):
+                            improved_code = improved_code[3:]
+                        if improved_code.endswith('```'):
+                            improved_code = improved_code[:-3]
+                        improved_code = improved_code.strip()
+                        
+                        # Debug info
+                        st.info(f"Generated {len(improved_code)} characters of improved code")
+                        
+                        # Show a preview of the changes
+                        with st.expander("Preview of Improved Code (first 500 chars)", expanded=True):
+                            st.code(improved_code[:500] + "..." if len(improved_code) > 500 else improved_code, language="python")
+                        
+                        # Store the improved code for display in main tab
+                        st.session_state[f'improved_evaluator_{selected_tool}'] = improved_code
+                        st.session_state[f'show_diff_{selected_tool}'] = True
+                        st.success("✅ Improved evaluator generated! Check the Evaluator tab to see the diff and apply changes.")
+                        
+                        # Close modal automatically
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error generating improved evaluator: {e}")
+            else:
+                st.warning("Please provide improvement instructions")
+
 def display_evolution_timeline(checkpoints: List[Dict]) -> None:
     """Display evolution progress over checkpoints."""
     if not checkpoints:
@@ -327,6 +636,9 @@ def main():
     import os
     default_base_dir = os.getenv('AGENT_EVOLVE_BASE_DIR', '.agent_evolve')
     base_dir = st.sidebar.text_input("Base Directory", value=default_base_dir)
+    
+    # Store base directory in session state for modal access
+    st.session_state['dashboard_base_dir'] = base_dir
     
     # Load data
     with st.spinner("Loading evolution data..."):
@@ -394,9 +706,11 @@ def main():
     tool_data = evolved_tools[selected_tool]
     
     # Create tabs for different views
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📈 Overview", "📋 Training Data", "🔧 Evaluator", "🔍 Evolved Code", "📊 Metrics", "⏱️ Timeline"])
+    overview_tab, training_tab, evolution_tab, evaluator_tab, evolved_code_tab, metrics_tab, timeline_tab = st.tabs([
+        "📈 Overview", "📋 Training Data", "🧬 Evolution", "🔧 Evaluator", "🔍 Evolved Code", "📊 Metrics", "⏱️ Timeline"
+    ])
     
-    with tab1:
+    with overview_tab:
         st.subheader("Overview")
         
         col1, col2 = st.columns(2)
@@ -429,8 +743,86 @@ def main():
             
             st.dataframe(scores_df, use_container_width=True)
     
-    with tab2:
-        st.subheader("Training Data")
+    with training_tab:
+        # Header with improve button
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.subheader("Training Data")
+        with col2:
+            if st.button("🤖 Improve with AI", key=f"improve_training_top_{selected_tool}"):
+                # Get current training data and evaluator code
+                current_training_data = tool_data.get('training_data', [])
+                evaluator_code = tool_data.get('evaluator_code', '')
+                # Show the modal
+                show_training_data_improvement_modal(selected_tool, current_training_data, evaluator_code)
+        
+        # Check if we should show training data diff view
+        if st.session_state.get(f'show_training_diff_{selected_tool}', False):
+            st.subheader("🔄 AI Improved Training Data - Review Changes")
+            
+            # Get the improved training data
+            improved_training_data = st.session_state.get(f'improved_training_data_{selected_tool}', [])
+            original_training_data = tool_data.get('training_data', [])
+            
+            if not improved_training_data:
+                st.error("❌ No improved training data found in session state. Please try generating again.")
+                del st.session_state[f'show_training_diff_{selected_tool}']
+                st.rerun()
+                return
+            
+            # Show side-by-side comparison
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Original Training Data**")
+                st.json(original_training_data)
+                st.caption(f"Total samples: {len(original_training_data)}")
+            
+            with col2:
+                st.markdown("**Improved Training Data**") 
+                st.json(improved_training_data)
+                st.caption(f"Total samples: {len(improved_training_data)}")
+                
+                # Apply button at bottom right
+                st.markdown("")  # Add some space
+                col_left, col_right = st.columns([3, 1])
+                with col_right:
+                    if st.button("✅ Apply Changes", type="primary", key=f"apply_training_diff_{selected_tool}"):
+                        # Save the improved training data directly to file
+                        training_data_path = Path(tool_data['path']) / "training_data.json"
+                        
+                        print(f"[APPLY TRAINING DIFF] Saving to: {training_data_path}")
+                        print(f"[APPLY TRAINING DIFF] Data samples: {len(improved_training_data)}")
+                        
+                        try:
+                            with open(training_data_path, 'w') as f:
+                                json.dump(improved_training_data, f, indent=2)
+                            
+                            print(f"[APPLY TRAINING DIFF] File saved successfully")
+                            st.success(f"✅ Training data changes applied and saved to {training_data_path}")
+                            
+                            # Update the in-memory data
+                            tool_data['training_data'] = improved_training_data
+                            
+                            # Clear the diff flags to return to regular view
+                            del st.session_state[f'show_training_diff_{selected_tool}']
+                            del st.session_state[f'improved_training_data_{selected_tool}']
+                            
+                            # Refresh the page
+                            st.rerun()
+                            
+                        except Exception as e:
+                            print(f"[APPLY TRAINING DIFF] Error: {e}")
+                            st.error(f"❌ Error saving: {e}")
+                
+                with col_left:
+                    if st.button("❌ Discard Changes", key=f"discard_training_diff_{selected_tool}"):
+                        # Clear the diff flags without saving
+                        del st.session_state[f'show_training_diff_{selected_tool}']
+                        del st.session_state[f'improved_training_data_{selected_tool}']
+                        st.rerun()
+            
+            return  # Don't show the regular training data view when in diff mode
         
         if tool_data['training_data']:
             # Display training data as a table
@@ -467,38 +859,313 @@ def main():
         else:
             st.warning("No training data available")
     
-    with tab3:
-        st.subheader("Evaluator Code")
+    with evaluator_tab:
+        # Header with improve button
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.subheader("Evaluator Code")
+        with col2:
+            if st.button("🤖 Improve with AI", key=f"improve_ai_top_{selected_tool}"):
+                # Store tool data in session state for modal access
+                st.session_state['current_tool_data'] = tool_data
+                
+                # Get current evaluator code - prioritize what's in the editor (session state)
+                current_code = None
+                
+                # First try to get from session state (what's currently in the editor)
+                if f'evaluator_editor_{selected_tool}' in st.session_state:
+                    current_code = st.session_state[f'evaluator_editor_{selected_tool}']
+                
+                # If not in session state, try to get from tool_data
+                if not current_code:
+                    current_code = tool_data.get('evaluator_code')
+                
+                # If still not found, try to reload from file
+                if not current_code:
+                    evaluator_file = Path(tool_data['path']) / "evaluator.py"
+                    if evaluator_file.exists():
+                        try:
+                            with open(evaluator_file, 'r', encoding='utf-8') as f:
+                                current_code = f.read()
+                        except Exception as e:
+                            print(f"[ERROR] Failed to read evaluator file: {e}")
+                
+                # Debug logging
+                print(f"[DEBUG] Tool: {selected_tool}")
+                print(f"[DEBUG] current_code source: {'session_state' if f'evaluator_editor_{selected_tool}' in st.session_state else 'tool_data' if tool_data.get('evaluator_code') else 'file' if current_code else 'none'}")
+                print(f"[DEBUG] current_code length: {len(current_code) if current_code else 'None'}")
+                
+                # Load training data
+                training_data = tool_data.get('training_data', [])
+                # Show the modal
+                show_ai_improvement_modal(selected_tool, current_code, training_data)
+        
+        # Check if there's a pending apply from the modal
+        if st.session_state.get(f'pending_apply_{selected_tool}'):
+            print(f"[MAIN] Processing pending apply for {selected_tool}")
+            
+            # Get the improved code
+            improved_code = st.session_state[f'pending_apply_{selected_tool}']
+            print(f"[MAIN] Applying {len(improved_code)} chars to editor")
+            
+            # Update the editor session state
+            st.session_state[f'evaluator_editor_{selected_tool}'] = improved_code
+            
+            # Clear the pending flag
+            del st.session_state[f'pending_apply_{selected_tool}']
+            
+            # Show success message
+            st.success("✅ Evaluator has been improved with AI! The code has been updated in the editor below. Click 'Save Evaluator' to save to file.")
+            
+            print(f"[MAIN] Applied successfully")
+        
+        # Check if AI improvement was just completed (legacy)
+        if st.session_state.get(f'ai_improvement_success_{selected_tool}', False):
+            st.success("✅ Evaluator has been improved with AI! Review the updated code below.")
+            # Clear the flag
+            del st.session_state[f'ai_improvement_success_{selected_tool}']
         
         if tool_data['evaluator_code']:
-            # Display evaluator code with syntax highlighting
-            st.code(tool_data['evaluator_code'], language='python')
+            # Check if we should show diff view
+            if st.session_state.get(f'show_diff_{selected_tool}', False):
+                st.subheader("🔄 AI Improved Code - Review Changes")
+                
+                # Get the improved code with debugging
+                improved_code = st.session_state.get(f'improved_evaluator_{selected_tool}', '')
+                original_code = tool_data['evaluator_code']
+                
+                # DEBUG: Show what we actually have
+                print(f"[DIFF VIEW] improved_code type: {type(improved_code)}")
+                print(f"[DIFF VIEW] improved_code length: {len(improved_code) if improved_code else 'None/Empty'}")
+                print(f"[DIFF VIEW] Session state keys: {[k for k in st.session_state.keys() if selected_tool in k]}")
+                
+                if not improved_code:
+                    st.error("❌ No improved code found in session state. Please try generating again.")
+                    # Clear the flag and return to regular view
+                    del st.session_state[f'show_diff_{selected_tool}']
+                    st.rerun()
+                    return
+                
+                # Show side-by-side diff with additions/deletions highlighted
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**Original Code**")
+                    # Create diff HTML for original (deletions in red)
+                    diff_html_original = create_code_diff_html_for_display(original_code, improved_code, show_original=True)
+                    st.markdown(diff_html_original, unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown("**Improved Code**")
+                    # Create diff HTML for improved (additions in green)
+                    diff_html_improved = create_code_diff_html_for_display(original_code, improved_code, show_original=False)
+                    st.markdown(diff_html_improved, unsafe_allow_html=True)
+                    
+                    # Apply button at bottom right
+                    st.markdown("")  # Add some space
+                    col_left, col_right = st.columns([3, 1])
+                    with col_right:
+                        if st.button("✅ Apply Changes", type="primary", key=f"apply_diff_{selected_tool}"):
+                            # Save the improved code directly to file
+                            evaluator_path = Path(tool_data['path']) / "evaluator.py"
+                            
+                            print(f"[APPLY DIFF] Saving to: {evaluator_path}")
+                            print(f"[APPLY DIFF] Code length: {len(improved_code)}")
+                            print(f"[APPLY DIFF] First 100 chars: {improved_code[:100]}")
+                            
+                            try:
+                                with open(evaluator_path, 'w') as f:
+                                    f.write(improved_code)
+                                
+                                print(f"[APPLY DIFF] File saved successfully")
+                                st.success(f"✅ Changes applied and saved to {evaluator_path}")
+                                
+                                # Update the in-memory data so the regular editor shows the new code
+                                tool_data['evaluator_code'] = improved_code
+                                
+                                # Update the editor session state with the new code
+                                st.session_state[f'evaluator_editor_{selected_tool}'] = improved_code
+                                
+                                # Clear the diff flags to return to regular editor
+                                del st.session_state[f'show_diff_{selected_tool}']
+                                del st.session_state[f'improved_evaluator_{selected_tool}']
+                                
+                                # Refresh the page
+                                st.rerun()
+                                
+                            except Exception as e:
+                                print(f"[APPLY DIFF] Error: {e}")
+                                st.error(f"❌ Error saving: {e}")
+                    
+                    with col_left:
+                        if st.button("❌ Discard Changes", key=f"discard_diff_{selected_tool}"):
+                            # Clear the diff flags without saving
+                            del st.session_state[f'show_diff_{selected_tool}']
+                            del st.session_state[f'improved_evaluator_{selected_tool}']
+                            st.rerun()
+                
+                return  # Don't show the regular editor when in diff mode
             
-            # Show code statistics
-            st.subheader("Code Statistics")
+            # Regular code editor
+            try:
+                # Try to use streamlit-ace for better code editing experience
+                from streamlit_ace import st_ace
+                
+                # Get the current value - check for improved code first
+                if st.session_state.get(f'improved_evaluator_{selected_tool}'):
+                    current_value = st.session_state[f'improved_evaluator_{selected_tool}']
+                    # Clear the improved code after using it
+                    del st.session_state[f'improved_evaluator_{selected_tool}']
+                else:
+                    current_value = st.session_state.get(f'evaluator_editor_{selected_tool}', tool_data['evaluator_code'])
+                
+                edited_code = st_ace(
+                    value=current_value,
+                    language='python',
+                    theme='github',  # Changed to lighter theme
+                    key=f"evaluator_editor_{selected_tool}",
+                    font_size=14,
+                    show_gutter=True,
+                    show_print_margin=True,
+                    wrap=False,
+                    auto_update=True,  # Changed to True for immediate updates
+                    annotations=None,
+                    height=600  # Set explicit height for more space
+                )
+                
+                # Note about the Apply button
+                st.caption("💡 Use the 'Save Evaluator' button below to save changes to file (Apply button only updates the editor)")
+            except ImportError:
+                # Fallback to text_area if ace editor not installed
+                st.info("💡 Install streamlit-ace for a better code editing experience: pip install streamlit-ace")
+                
+                # Get the current value - check for improved code first
+                if st.session_state.get(f'improved_evaluator_{selected_tool}'):
+                    current_value = st.session_state[f'improved_evaluator_{selected_tool}']
+                    # Clear the improved code after using it
+                    del st.session_state[f'improved_evaluator_{selected_tool}']
+                else:
+                    current_value = st.session_state.get(f'evaluator_editor_{selected_tool}', tool_data['evaluator_code'])
+                
+                edited_code = st.text_area(
+                    "Edit evaluator code:",
+                    value=current_value,
+                    height=600,
+                    key=f"evaluator_editor_{selected_tool}"
+                )
+            
+            # Action buttons
             col1, col2, col3 = st.columns(3)
             
-            lines = tool_data['evaluator_code'].split('\n')
+            with col1:
+                if st.button("💾 Save Evaluator", type="primary"):
+                    evaluator_path = Path(tool_data['path']) / "evaluator.py"
+                    
+                    # DEBUG THE EDITOR STATE
+                    print(f"[SAVE] Tool: {selected_tool}")
+                    print(f"[SAVE] edited_code type: {type(edited_code)}")
+                    print(f"[SAVE] edited_code value: '{edited_code}'")
+                    print(f"[SAVE] edited_code length: {len(edited_code) if edited_code else 'None'}")
+                    print(f"[SAVE] Session state editor key exists: {f'evaluator_editor_{selected_tool}' in st.session_state}")
+                    if f'evaluator_editor_{selected_tool}' in st.session_state:
+                        session_value = st.session_state[f'evaluator_editor_{selected_tool}']
+                        print(f"[SAVE] Session state value type: {type(session_value)}")
+                        print(f"[SAVE] Session state value length: {len(session_value) if session_value else 'None'}")
+                        print(f"[SAVE] Session state first 100 chars: {session_value[:100] if session_value else 'None'}")
+                    
+                    try:
+                        with open(evaluator_path, 'w') as f:
+                            f.write(edited_code)
+                        print(f"[SAVE] SUCCESS: File written")
+                        st.success(f"✅ Evaluator saved to {evaluator_path}")
+                        # Update the in-memory data
+                        tool_data['evaluator_code'] = edited_code
+                    except Exception as e:
+                        print(f"[SAVE] ERROR: {e}")
+                        st.error(f"❌ Error saving evaluator: {e}")
+            
+            with col2:
+                if st.button("🔍 Validate Evaluator"):
+                    try:
+                        # Try to compile the code
+                        compile(edited_code, '<string>', 'exec')
+                        
+                        # Check for required function
+                        if 'def evaluate(' in edited_code:
+                            st.success("✅ Evaluator syntax is valid and contains evaluate() function")
+                        else:
+                            st.error("❌ Missing required 'def evaluate(' function")
+                            
+                    except SyntaxError as e:
+                        st.error(f"❌ Syntax error: {e}")
+                    except Exception as e:
+                        st.error(f"❌ Validation error: {e}")
+            
+            with col3:
+                if st.button("🤖 Improve with AI"):
+                    # Store tool data in session state for modal access
+                    st.session_state['current_tool_data'] = tool_data
+                    
+                    # Get current evaluator code - prioritize what's in the editor (session state)
+                    current_code = None
+                    
+                    # First try to get from session state (what's currently in the editor)
+                    if f'evaluator_editor_{selected_tool}' in st.session_state:
+                        current_code = st.session_state[f'evaluator_editor_{selected_tool}']
+                    
+                    # If not in session state, try to get from tool_data
+                    if not current_code:
+                        current_code = tool_data.get('evaluator_code')
+                    
+                    # If still not found, try to reload from file
+                    if not current_code:
+                        evaluator_file = Path(tool_data['path']) / "evaluator.py"
+                        if evaluator_file.exists():
+                            try:
+                                with open(evaluator_file, 'r', encoding='utf-8') as f:
+                                    current_code = f.read()
+                            except Exception as e:
+                                print(f"[ERROR] Failed to read evaluator file: {e}")
+                    
+                    # Debug logging
+                    print(f"[DEBUG BOTTOM] Tool: {selected_tool}")
+                    print(f"[DEBUG BOTTOM] current_code length: {len(current_code) if current_code else 'None'}")
+                    
+                    # Load training data
+                    training_data = tool_data.get('training_data', [])
+                    # Show the modal
+                    show_ai_improvement_modal(selected_tool, current_code, training_data)
+            
+            # Show code statistics at the bottom
+            st.markdown("---")
+            st.subheader("Code Statistics")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            lines = edited_code.split('\n')
             with col1:
                 st.metric("Lines of Code", len(lines))
             with col2:
-                st.metric("Characters", len(tool_data['evaluator_code']))
+                st.metric("Characters", len(edited_code))
+            
+            # Count functions
+            import re
+            functions = re.findall(r'def\s+(\w+)', edited_code)
             with col3:
-                # Count functions
-                import re
-                functions = re.findall(r'def\s+\w+', tool_data['evaluator_code'])
                 st.metric("Functions", len(functions))
             
             # Show function list
-            if functions:
-                st.subheader("Functions Found")
-                for func in functions:
-                    st.code(func, language='python')
+            with col4:
+                if functions:
+                    st.markdown("**Functions found:**")
+                    for func in functions:
+                        st.markdown(f"- `def {func}()`")
+                    
         else:
             st.warning("No evaluator code available")
             st.info("Run evaluator generation first to see the code")
     
-    with tab4:
+    with evolved_code_tab:
         st.subheader("Evolved Code")
         
         if tool_data['original_code'] and tool_data['best_code']:
@@ -533,7 +1200,7 @@ def main():
         else:
             st.warning("Code files not available for comparison")
     
-    with tab5:
+    with metrics_tab:
         st.subheader("Performance Metrics")
         
         if tool_data['score_comparison']:
@@ -550,7 +1217,7 @@ def main():
         else:
             st.warning("No metrics data available")
     
-    with tab6:
+    with timeline_tab:
         st.subheader("Evolution Timeline")
         
         if tool_data['checkpoints']:
