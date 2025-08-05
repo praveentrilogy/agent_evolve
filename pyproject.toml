@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-evolve"
+version = "1.0.0"
+authors = [
+    {name = "Agent Evolution Team", email = "team@agentevolve.com"},
+]
+description = "A comprehensive toolkit for evolving and tracking AI agents"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+keywords = ["ai", "agent", "evolution", "machine-learning", "optimization"]
+dependencies = [
+    "streamlit>=1.28.0",
+    "streamlit-ace>=0.1.1",
+    "plotly>=5.0.0",
+    "pandas>=1.3.0",
+    "openai>=1.0.0",
+    "openevolve>=0.1.0",
+    "langchain-openai>=0.1.0",
+    "langchain-core>=0.1.0",
+    "python-dotenv>=0.19.0",
+    "yfinance>=0.2.0",
+    "PyYAML>=6.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-asyncio",
+    "black",
+    "flake8",
+]
+
+[project.scripts]
+agent-evolve = "agent_evolve.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/agent-evolve"
+Documentation = "https://agent-evolve.readthedocs.io/"
+Repository = "https://github.com/yourusername/agent-evolve.git"
+"Bug Tracker" = "https://github.com/yourusername/agent-evolve/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_evolve*"]
+exclude = ["tests*"]
