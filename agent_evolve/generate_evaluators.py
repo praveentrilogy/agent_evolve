@@ -15,23 +15,15 @@ import sys
 import json
 from pathlib import Path
 from typing import Dict, List, Any
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
+import openai
 
 
 class EvaluatorGenerator:
     """Generates OpenEvolve evaluators for agent tools using LLM"""
     
     def __init__(self, model_name: str = "gpt-4o"):
-        # Use higher token limits for models that support it
-        max_tokens = 16000 if "gpt-4o" in model_name else 8000
-        
-        self.model = ChatOpenAI(
-            model=model_name, 
-            temperature=0.0,
-            max_tokens=max_tokens,
-            timeout=120
-        )
+        self.client = openai.OpenAI()
+        self.model_name = model_name
         self.tools_dir = Path("evolution/tools")
     
     def generate_evaluators(self, tools_directory: str = None):
@@ -70,9 +62,54 @@ class EvaluatorGenerator:
             print(f"Error reading tool file: {e}")
             return
 
+    def _strip_markdown_code_blocks(self, code: str) -> str:
+        """Strip markdown code blocks from the generated code"""
+        import re
+        
+        # Remove markdown code blocks with language specification
+        code = re.sub(r'```python\s*\n', '', code)
+        code = re.sub(r'```\s*\n', '', code)
+        code = re.sub(r'\n```$', '', code)
+        
+        # Also handle cases where there might be no newline after opening
+        code = re.sub(r'```python', '', code)
+        code = re.sub(r'```', '', code)
+        
+        return code.strip()
+
+    def _clean_json_response(self, response_text: str) -> str:
+        """Clean JSON response by removing markdown formatting and extracting JSON"""
+        import re
+        
+        # Remove any markdown code blocks
+        response_text = self._strip_markdown_code_blocks(response_text)
+        
+        # Try to extract JSON from the response
+        # Look for JSON object pattern
+        json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+        json_matches = re.findall(json_pattern, response_text, re.DOTALL)
+        
+        if json_matches:
+            # Return the longest match (most likely to be complete JSON)
+            return max(json_matches, key=len)
+        
+        # If no JSON pattern found, try to find JSON array pattern
+        array_pattern = r'\[[^\[\]]*(?:\{[^{}]*\}[^\[\]]*)*\]'
+        array_matches = re.findall(array_pattern, response_text, re.DOTALL)
+        
+        if array_matches:
+            # Return the longest match
+            return max(array_matches, key=len)
+        
+        # If still no JSON pattern found, return the cleaned text
+        return response_text.strip()
+
     def _fix_common_import_errors(self, code: str) -> str:
         """Fix common import errors and enforce raw OpenAI API usage"""
         import re
+        
+        # First strip any markdown code blocks
+        code = self._strip_markdown_code_blocks(code)
         
         # Replace langchain imports with raw OpenAI
         code = re.sub(
@@ -192,12 +229,45 @@ Return a JSON with:
 If the code needs fixing, provide the complete corrected code in suggested_fix.
 Use raw OpenAI API: openai.OpenAI(), client.chat.completions.create(), response.choices[0].message.content
 
-Return ONLY JSON, no explanations."""
+Return ONLY JSON, no explanations. Don't return any markdown or json```"""
 
         try:
-            response = self.model.invoke([HumanMessage(content=validation_prompt)])
-            result = json.loads(response.content)
-            return result
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "system", "content": validation_prompt}],
+                temperature=0.0
+            )
+
+
+            print(f"LLM Validation Response: {response.choices[0].message.content}")
+
+            # Clean the response to extract JSON
+            cleaned_response = self._clean_json_response(response.choices[0].message.content)
+            print(f"Cleaned JSON response: {cleaned_response}")
+            
+            try:
+                result = json.loads(cleaned_response)
+                return result
+            except json.JSONDecodeError as json_error:
+                print(f"JSON parsing error: {json_error}")
+                print(f"Failed to parse: {cleaned_response}")
+                # Try to extract JSON with more aggressive cleaning
+                import re
+                # Remove any non-JSON text before and after
+                json_only = re.sub(r'^[^{]*', '', cleaned_response)
+                json_only = re.sub(r'[^}]*$', '', json_only)
+                try:
+                    result = json.loads(json_only)
+                    return result
+                except:
+                    pass
+                
+                # Fallback to basic validation
+                return {
+                    "is_valid": self._validate_evaluator_code(code),
+                    "issues": [f"JSON parsing failed: {json_error}"],
+                    "suggested_fix": None
+                }
         except Exception as e:
             print(f"LLM validation failed: {e}")
             # Fallback to basic validation
@@ -286,19 +356,21 @@ Return your response in this exact JSON format:
 
 Be specific and choose metrics that truly matter for this function's output quality."""
 
-        response = self.model.invoke([HumanMessage(content=analysis_prompt)])
-        print(response.content)
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[{"role": "system", "content": analysis_prompt}],
+            temperature=0.0
+        )
+        print(response.choices[0].message.content)
         
         try:
             import re
             # Extract JSON from response
-            content = response.content.strip()
-            if "```json" in content:
-                content = re.search(r'```json\s*([^`]+)```', content, re.DOTALL).group(1).strip()
-            elif "```" in content:
-                content = re.search(r'```\s*([^`]+)```', content, re.DOTALL).group(1).strip()
+            content = response.choices[0].message.content.strip()
+            # Clean the response to extract JSON
+            cleaned_content = self._clean_json_response(content)
             
-            analysis = json.loads(content)
+            analysis = json.loads(cleaned_content)
             description = analysis.get("function_description", f"Function: {tool_name}")
             function_type = analysis.get("function_type", "creative").lower()
             metrics = analysis.get("metrics", ["quality", "relevance", "usefulness", "clarity"])
@@ -311,7 +383,7 @@ Be specific and choose metrics that truly matter for this function's output qual
             
         except Exception as e:
             print(f"Error parsing function analysis: {e}")
-            print(f"Raw response: {response.content}")
+            print(f"Raw response: {response.choices[0].message.content}")
             return f"Function: {tool_name}", "creative", ["quality", "relevance", "usefulness", "clarity"]
 
     def _generate_evaluator_file(self, tool_dir: Path, feedback: str = None):
@@ -331,72 +403,6 @@ Be specific and choose metrics that truly matter for this function's output qual
         training_data = []
         if training_data_file.exists():
             training_data = json.load(open(training_data_file, 'r', encoding='utf-8'))
-
-        prompt = {
-            "role": "You are an expert in creating OpenEvolve-compatible evaluators.",
-            "task": "Generate a Python evaluator file for OpenEvolve that evaluates the given tool's output quality.",
-            "function_name": tool_name,
-            "function_code": source_code,
-            "training_data_examples": training_data[:3] if training_data else [],
-            "instructions": (
-                "Create a Python evaluator file that OpenEvolve can use to evaluate this tool.",
-                "The evaluator must have EXACTLY this function signature: def evaluate(program) -> dict:",
-                "The 'program' parameter is the file path to the tool's Python file.",
-                "The function must return a dictionary with metric names as keys and float scores (0.0-1.0) as values.",
-                "Choose evaluation metrics that are contextually relevant to what this specific tool does.",
-                "When evaluating a tool that generates content like text or code, returning non deterministic LLM outputs, Use an LLM to evaluate the output quality. Generate a strict and objective prompt which is sent to an LLM to evaluate the output quality.",
-                "CRITICAL: For JSON parsing from LLM responses, you MUST use robust error handling:",
-                "- Strip whitespace and check for empty responses",
-                "- Extract JSON from markdown code blocks if present", 
-                "- Use try/except blocks around json.loads()",
-                "- Fall back to default scores if JSON parsing fails",
-                "- Log parsing errors for debugging",
-                "The evaluator MUST load training_data.json from the same directory as the evaluator.",
-                "The evaluator MUST call the tool function with EVERY test case from the training data.",
-                "The evaluator MUST calculate metrics for each test case and return the AVERAGE across all test cases.",
-                "Use the training data examples to understand expected inputs and outputs.",
-                "Include proper error handling and logging.",
-                "Make the evaluation logic specific to this tool's purpose, not generic.",
-                "Log all LLM inputs and outputs to the logger.",
-            ),
-            "required_structure": (
-                "The file must include:",
-                "1. Standard imports: import os, json, logging, re, importlib.util, openai",
-                "   CRITICAL: DO NOT USE LANGCHAIN. Use raw OpenAI API only.",
-                "2. Logger initialization: logger = logging.getLogger(__name__)",
-                "3. A robust JSON parsing function with this exact signature:",
-                "   def parse_json_response(response_content: str, default_metrics: dict) -> dict:",
-                "   - Strip whitespace and handle empty responses",
-                "   - Extract JSON from ```json``` or ``` ``` markdown blocks using regex", 
-                "   - Use try/except around json.loads() with detailed error logging",
-                "   - Validate response is dict and clamp values to 0.0-1.0 range",
-                "   - Return default_metrics on any parsing failure",
-                "4. The evaluate(program) -> dict function with proper error handling",
-                "5. Load training_data.json from os.path.dirname(os.path.abspath(__file__))",
-                "6. Dynamic tool loading using importlib to load the program file",
-                "7. Execute the tool function with EVERY input from training_data.json",
-                "8. For each test case, use LLM evaluation then call parse_json_response(response.content, default_metrics)",
-                "9. Return dictionary with AVERAGED metric scores between 0.0 and 1.0 across all test cases"
-            ),
-            "json_parsing_example": '''def parse_json_response(response_content: str, default_metrics: dict) -> dict:
-    try:
-        content = response_content.strip()
-        if not content:
-            return default_metrics
-        if "```json" in content:
-            content = re.search(r'```json\\s*([^`]+)```', content, re.DOTALL).group(1).strip()
-        elif "```" in content:
-            content = re.search(r'```\\s*([^`]+)```', content, re.DOTALL).group(1).strip()
-        parsed = json.loads(content)
-        if isinstance(parsed, dict):
-            return {k: max(0.0, min(1.0, float(v))) for k, v in parsed.items() if k in default_metrics}
-        return default_metrics
-    except Exception as e:
-        logger.error(f"JSON parse error: {e}")
-        return default_metrics''',
-            "output_format": "python",
-            "output_instructions": "Return ONLY the complete Python code for the evaluator file. Include the exact parse_json_response function shown in json_parsing_example. No markdown, backticks, or explanations."
-        }
 
         # Build the prompt with optional feedback
         feedback_section = ""
@@ -423,13 +429,16 @@ CRITICAL: Address all the issues mentioned above in your new implementation.
                 tool_name, function_description, metrics, source_code, training_data, feedback_section
             )
 
-        response = self.model.invoke([HumanMessage(content=evaluation_prompt)])
-        print(f"LLM Response length: {len(response.content)}")
-        print(f"Response starts with: {response.content[:100]}")
-        print(f"Response ends with: {response.content[-100:]}")
+        response = self.client.chat.completions.create(
+            model=self.model_name,
+            messages=[{"role": "system", "content": evaluation_prompt}],
+            temperature=0.0
+        )
+        print(f"LLM Response: {response.choices[0].message.content}")
+
         
         try:
-            evaluator_code = response.content
+            evaluator_code = response.choices[0].message.content
             
             # Fix common import errors in generated code
             evaluator_code = self._fix_common_import_errors(evaluator_code)
@@ -488,7 +497,7 @@ CRITICAL: Address all the issues mentioned above in your new implementation.
             return evaluator_code
         except Exception as e:
             print(f"Error saving evaluator: {e}")
-            print(f"Raw response: {response.content}")
+            print(f"Raw response: {response.choices[0].message.content}")
             return None
 
 
@@ -1014,8 +1023,7 @@ import json
 import importlib.util
 import inspect  # CRITICAL: For analyzing function source code
 import re
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
+import openai
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1068,8 +1076,8 @@ def evaluate(program) -> dict:
     # CRITICAL: Extract source code for algorithm analysis
     function_source = inspect.getsource(tool_function)
     
-    # Initialize LLM
-    model = ChatOpenAI(model="gpt-4o", temperature=0.0)
+    # Initialize OpenAI client
+    client = openai.OpenAI()
     
     # Process each test case with BOTH code analysis and output evaluation
     # [Continue with implementation that analyzes algorithm AND tests outputs]
@@ -1205,8 +1213,7 @@ COMPLETE EVALUATOR STRUCTURE:
 import os
 import json
 import re
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
+import openai
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1257,8 +1264,8 @@ def evaluate(program) -> dict:
     
     prompt_template = prompt_match.group(2).strip()
     
-    # Initialize LLM
-    model = ChatOpenAI(model="gpt-4o", temperature=0.0)
+    # Initialize OpenAI client
+    client = openai.OpenAI()
     
     # Evaluate prompt with each test case
     scores = {{metric: 0.0 for metric in EVALUATION_METRICS}}
@@ -1272,8 +1279,12 @@ def evaluate(program) -> dict:
             formatted_prompt = prompt_template
             
         # Send to LLM
-        response = model.invoke([HumanMessage(content=formatted_prompt)])
-        llm_output = response.content
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": formatted_prompt}],
+            temperature=0.0
+        )
+        llm_output = response.choices[0].message.content
         
         # Create evaluation prompt
         eval_prompt = f\"\"\"You are evaluating a PROMPT TEMPLATE and the output it generates.
@@ -1315,8 +1326,12 @@ Rate on these EXACT metrics (0.0-1.0 scale):
 Return ONLY JSON with exact metric names.\"\"\"
         
         # Get evaluation
-        eval_response = model.invoke([HumanMessage(content=eval_prompt)])
-        case_scores = parse_json_response(eval_response.content)
+        eval_response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": eval_prompt}],
+            temperature=0.0
+        )
+        case_scores = parse_json_response(eval_response.choices[0].message.content)
         
         # Accumulate scores
         for metric in EVALUATION_METRICS:
