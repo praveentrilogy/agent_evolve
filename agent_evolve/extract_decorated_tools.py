@@ -106,10 +106,22 @@ class DecoratedToolExtractor:
                         })
                 self.generic_visit(node)
             
+            def visit_AsyncFunctionDef(self, node):
+                for decorator in node.decorator_list:
+                    decorator_name = self._get_decorator_name(decorator)
+                    if decorator_name and 'evolve' in decorator_name:
+                        decorated.append({
+                            'name': node.name,
+                            'node': node,
+                            'decorator': decorator_name,
+                            'type': 'function'
+                        })
+                self.generic_visit(node)
+            
             def visit_ClassDef(self, node):
                 # Check methods in classes
                 for item in node.body:
-                    if isinstance(item, ast.FunctionDef):
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         for decorator in item.decorator_list:
                             decorator_name = self._get_decorator_name(decorator)
                             if decorator_name and 'evolve' in decorator_name:
