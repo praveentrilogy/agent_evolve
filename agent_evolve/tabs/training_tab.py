@@ -255,6 +255,8 @@ def render_training_tab(tool_data, selected_tool):
         
         if flattened_data:
             flattened_df = pd.DataFrame(flattened_data)
+            # Convert all columns to string to avoid Arrow type conversion issues
+            flattened_df = flattened_df.astype(str)
             st.dataframe(flattened_df, use_container_width=True)
             
             # Show summary statistics

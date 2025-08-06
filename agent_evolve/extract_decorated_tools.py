@@ -505,6 +505,24 @@ Extracted from: {Path(tool_info['source_file']).name}
 {tool_info['description']}
 """
 
+import sys
+import os
+
+# Add project root to Python path to resolve imports
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Dynamically find and add directories containing 'src' to path
+current_dir = os.path.abspath(os.path.dirname(__file__))
+search_root = project_root
+for root, dirs, files in os.walk(search_root):
+    if 'src' in dirs:
+        src_parent = os.path.abspath(root)
+        if src_parent not in sys.path:
+            sys.path.insert(0, src_parent)
+        break
+
 {imports}
 
 {dependencies}
@@ -559,6 +577,24 @@ Class method: {tool_info['class_name']}.{tool_info['method_name']}
 {tool_info['description']}
 """
 
+import sys
+import os
+
+# Add project root to Python path to resolve imports
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Dynamically find and add directories containing 'src' to path
+current_dir = os.path.abspath(os.path.dirname(__file__))
+search_root = project_root
+for root, dirs, files in os.walk(search_root):
+    if 'src' in dirs:
+        src_parent = os.path.abspath(root)
+        if src_parent not in sys.path:
+            sys.path.insert(0, src_parent)
+        break
+
 {imports}
 
 {tool_info['class_source']}
@@ -576,26 +612,19 @@ if __name__ == "__main__":
         return code
     
     def _extract_imports(self, file_path: str, function_name: str = None) -> str:
-        """Extract only used import statements from a file"""
+        """Extract all relevant import statements from a file"""
         with open(file_path, 'r') as f:
             source = f.read()
         
         tree = ast.parse(source)
         
-        # First, collect all imports
+        # Collect all imports, being more inclusive
         all_imports = []
-        import_map = {}  # Maps imported names to their import statements
         
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 import_stmt = ast.unparse(node)
                 all_imports.append(import_stmt)
-                # Map each alias/name to this import
-                for alias in node.names:
-                    name = alias.asname if alias.asname else alias.name
-                    import_map[name] = import_stmt
-                    # Also map the base module name
-                    import_map[alias.name.split('.')[0]] = import_stmt
                     
             elif isinstance(node, ast.ImportFrom):
                 # Skip old evolution decorator imports in standalone tools
@@ -610,41 +639,13 @@ if __name__ == "__main__":
                     
                 import_stmt = ast.unparse(node)
                 all_imports.append(import_stmt)
-                # Map each imported name to this import
-                for alias in node.names:
-                    name = alias.asname if alias.asname else alias.name
-                    import_map[name] = import_stmt
-                    if node.module:
-                        # Also map module.name pattern
-                        import_map[f"{node.module}.{name}"] = import_stmt
         
-        # Now find all names used in the extracted function and its dependencies
-        used_names = self._find_all_used_names(source, function_name)
-        
-        # Determine which imports are actually needed
-        needed_imports = set()
-        for name in used_names:
-            if name in import_map:
-                needed_imports.add(import_map[name])
-            # Check for partial matches (e.g., 'pd' for 'pandas')
-            for import_name, import_stmt in import_map.items():
-                if name.startswith(import_name + '.') or name == import_name:
-                    needed_imports.add(import_stmt)
-        
-        # Always include some common imports that might be used indirectly
-        common_essential = ['import os', 'from dotenv import load_dotenv', 'import logging']
-        for common in common_essential:
-            if any(common_imp in all_imports for common_imp in [common]):
-                for imp in all_imports:
-                    if common in imp:
-                        needed_imports.add(imp)
-                        break
-        
-        # Add the evolve decorator import for extracted tools
-        needed_imports.add('from agent_evolve import evolve')
+        # For now, include ALL imports to avoid missing dependencies
+        # This is more robust than trying to guess which ones are needed
+        needed_imports = list(set(all_imports))  # Remove duplicates
         
         # Sort and return unique imports
-        final_imports = sorted(list(needed_imports))
+        final_imports = sorted(needed_imports)
         return '\n'.join(final_imports)
 
     def _find_all_used_names(self, source: str, function_name: str = None) -> set:

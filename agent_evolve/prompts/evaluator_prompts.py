@@ -48,7 +48,21 @@ LOAD_TRAINING_DATA = """# Load training data
     with open(training_data_path, 'r') as f:
         training_data = json.load(f)"""
 
-IMPORT_TOOL_MODULE = """# Import tool module
+IMPORT_TOOL_MODULE = """# Add project root to Python path to resolve imports
+    import sys
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    
+    # Dynamically find and add directories containing 'src' to path
+    for root, dirs, files in os.walk(project_root):
+        if 'src' in dirs:
+            src_parent = os.path.abspath(root)
+            if src_parent not in sys.path:
+                sys.path.insert(0, src_parent)
+            break
+    
+    # Import tool module
     spec = importlib.util.spec_from_file_location("tool_module", program)
     tool_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(tool_module)"""

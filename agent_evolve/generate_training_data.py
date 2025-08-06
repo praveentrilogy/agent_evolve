@@ -145,8 +145,8 @@ class TrainingDataGenerator:
         """Generate training data specifically for prompt templates"""
         import re
         
-        # Extract the prompt template from source code
-        prompt_match = re.search(r'([A-Z_]+)\s*=\s*"""(.*?)"""', source_code, re.DOTALL)
+        # Extract the prompt template from source code (handle both uppercase and lowercase)
+        prompt_match = re.search(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"""(.*?)"""', source_code, re.DOTALL)
         if not prompt_match:
             print(f"  ❌ Could not extract prompt template from source")
             return False
@@ -157,42 +157,47 @@ class TrainingDataGenerator:
         print(f"  📝 Found prompt template: {prompt_name}")
         print(f"  📏 Prompt length: {len(prompt_content)} characters")
         
+        # Extract variables from the prompt template (only simple variable names)
+        import re
+        # Find {variable_name} patterns but exclude JSON template structures
+        all_matches = re.findall(r'\{([^}]+)\}', prompt_content)
+        # Filter to only simple variable names (letters, numbers, underscores)
+        variables = [match for match in all_matches if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', match)]
+        unique_variables = list(set(variables))
+        print(f"  🔧 Found template variables: {unique_variables}")
+        
         # Generate training data specific to this prompt type
         prompt = f"""Generate training data for testing this PROMPT TEMPLATE:
 
 PROMPT TEMPLATE:
 {prompt_content}
 
-PROMPT ANALYSIS:
-This is a prompt template for intent classification that determines user intent from messages.
+TEMPLATE VARIABLES ANALYSIS:
+This prompt template uses the following variables that need to be filled in: {unique_variables}
 
-TASK: Generate {self.num_samples} diverse test cases for evaluating this prompt.
+TASK: Generate {self.num_samples} diverse test cases for evaluating this prompt template.
 
 TRAINING DATA FORMAT:
-Each test case should have:
-- "user_message": A realistic user message to classify
-- "expected_intent": The correct intent category this message should produce
-
-The prompt categorizes messages as:
-1. "research_and_write" - User wants to research and write content
-2. "improve_and_rewrite_draft" - User wants to improve existing content  
-3. "other" - User wants something else
+Each test case should be a dictionary with keys matching the template variables.
+Based on the template variables {unique_variables}, create realistic values for each variable.
 
 INSTRUCTIONS:
-- Generate diverse, realistic user messages
-- Cover all three intent categories evenly
-- Include edge cases and challenging examples
-- Make messages sound natural and varied
-- Ensure expected_intent matches one of the three categories exactly
+1. Analyze what each variable represents based on the prompt context
+2. Generate diverse, realistic values for each variable - DO NOT repeat the same values
+3. Create {self.num_samples} different combinations that would test the prompt effectively
+4. Make the test cases represent realistic use scenarios for this prompt
+5. For variables like PURPOSE_CHOICES, generate different sets of options in each example
+6. Vary all template variables across examples to create meaningful diversity
 
-EXAMPLE FORMAT:
-[
-    {{"user_message": "Write a LinkedIn post about AI trends", "expected_intent": "research_and_write"}},
-    {{"user_message": "Make this more engaging", "expected_intent": "improve_and_rewrite_draft"}},
-    {{"user_message": "What's the weather today?", "expected_intent": "other"}}
-]
+CRITICAL: DO NOT copy these example values. Generate your own diverse, realistic values:
+- filename: Use different CSV file names relevant to various domains
+- PURPOSE_CHOICES: Generate different arrays of purpose options (e.g., data processing purposes, business purposes, etc.)
+- datetimenow: Use different timestamps
+- sheets_section: Create different CSV structures and content
 
-Generate {self.num_samples} training examples now.
+Each example should have DIFFERENT values for ALL variables.
+
+Generate {self.num_samples} training examples now with realistic values for variables: {unique_variables}
 Return ONLY a valid JSON array. No explanations, no markdown, just the JSON array."""
 
         return self._execute_llm_generation(prompt, training_data_file)

@@ -34,8 +34,8 @@ def find_commented_evolve_decorators(file_path: str) -> List[Dict[str, Any]]:
             if next_line_idx < len(lines):
                 next_line = lines[next_line_idx]
                 
-                # Check if it's a variable assignment (constant)
-                assignment_match = re.match(r'^([A-Z_][A-Z0-9_]*)\s*=', next_line.strip())
+                # Check if it's a variable assignment (constant or enum value)
+                assignment_match = re.match(r'^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=', next_line.strip())
                 if assignment_match:
                     var_name = assignment_match.group(1)
                     
@@ -60,24 +60,37 @@ def extract_variable_value(lines: List[str], start_idx: int) -> str:
     
     start_line = lines[start_idx]
     
-    # Check if it's a simple assignment
-    if '=' in start_line and (start_line.strip().endswith('"') or start_line.strip().endswith("'")):
-        # Single line string
-        return start_line.split('=', 1)[1].strip()
-    
-    # Check for multiline string (triple quotes)
-    if '"""' in start_line:
-        result_lines = [start_line]
-        quote_count = start_line.count('"""')
+    # Check for multiline string FIRST (triple quotes) - handle both """ and '''
+    if '"""' in start_line or "'''" in start_line:
+        result_lines = []
+        quote_type = '"""' if '"""' in start_line else "'''"
+        quote_count = start_line.count(quote_type)
         
-        if quote_count == 1:  # Opening """ only
-            # Find closing """
+        # Start collecting the string - include the opening quotes
+        if '=' in start_line:
+            # Get everything after the = sign
+            assignment_part = start_line.split('=', 1)[1]
+            result_lines.append(assignment_part.rstrip('\n'))
+        else:
+            result_lines.append(start_line.rstrip('\n'))
+        
+        if quote_count == 1:  # Opening quotes only - multiline string
+            # Find closing quotes
             for i in range(start_idx + 1, len(lines)):
-                result_lines.append(lines[i])
-                if '"""' in lines[i]:
+                line_content = lines[i]  # Don't strip newlines, preserve content
+                result_lines.append(line_content)
+                if quote_type in lines[i]:
                     break
+        elif quote_count >= 2:  # Complete string on one line
+            # Already added above
+            pass
         
         return '\n'.join(result_lines)
+    
+    # Check if it's a simple assignment (single line string)
+    elif '=' in start_line and (start_line.strip().endswith('"') or start_line.strip().endswith("'")):
+        # Single line string
+        return start_line.split('=', 1)[1].strip()
     
     # For other cases, just return the line
     return start_line
@@ -100,8 +113,8 @@ Type: Prompt/Template Constant
 This is a prompt/template optimization target.
 """
 
-# The target prompt/template for evolution
-{target_info['value']}
+# The target prompt/template for evolution (preserving original signature)
+{target_info['name']} = {target_info['value']}
 
 
 def {tool_name}():
