@@ -16,6 +16,16 @@ import json
 from pathlib import Path
 from typing import Dict, List, Any
 import openai
+import re
+import ast
+
+from agent_evolve.prompts.evaluator_prompts import (
+    FUNCTION_ANALYSIS_PROMPT,
+    VALIDATION_PROMPT,
+    get_quantitative_evaluator_prompt,
+    get_prompt_evaluator_prompt,
+    get_content_evaluator_prompt
+)
 
 
 class EvaluatorGenerator:
@@ -64,7 +74,7 @@ class EvaluatorGenerator:
 
     def _strip_markdown_code_blocks(self, code: str) -> str:
         """Strip markdown code blocks from the generated code"""
-        import re
+        
         
         # Remove markdown code blocks with language specification
         code = re.sub(r'```python\s*\n', '', code)
@@ -79,7 +89,6 @@ class EvaluatorGenerator:
 
     def _clean_json_response(self, response_text: str) -> str:
         """Clean JSON response by removing markdown formatting and extracting JSON"""
-        import re
         
         # Remove any markdown code blocks
         response_text = self._strip_markdown_code_blocks(response_text)
@@ -106,7 +115,6 @@ class EvaluatorGenerator:
 
     def _fix_common_import_errors(self, code: str) -> str:
         """Fix common import errors and enforce raw OpenAI API usage"""
-        import re
         
         # First strip any markdown code blocks
         code = self._strip_markdown_code_blocks(code)
@@ -168,7 +176,7 @@ class EvaluatorGenerator:
             compile(code, '<string>', 'exec')
             
             # Check that evaluate function has a return statement
-            import ast
+            
             tree = ast.parse(code)
             
             # Find the evaluate function
@@ -205,31 +213,7 @@ class EvaluatorGenerator:
 
     def _validate_evaluator_with_llm(self, code: str) -> dict:
         """Use LLM to validate and potentially fix evaluator code"""
-        validation_prompt = f"""You are a Python code validator. Analyze this evaluator code and check for common issues:
-
-CODE TO VALIDATE:
-```python
-{code}
-```
-
-CHECK FOR THESE ISSUES:
-1. Syntax errors (try compiling the code)
-2. Import errors (wrong imports like 'Message' instead of proper OpenAI API)
-3. API usage errors (using langchain instead of raw OpenAI API)
-4. Missing error handling
-5. Incorrect response parsing
-6. Missing required functions (def evaluate)
-
-RESPONSE FORMAT:
-Return a JSON with:
-- "is_valid": boolean (true if code is correct)
-- "issues": list of strings describing problems found
-- "suggested_fix": string containing corrected code (only if fixable), or null
-
-If the code needs fixing, provide the complete corrected code in suggested_fix.
-Use raw OpenAI API: openai.OpenAI(), client.chat.completions.create(), response.choices[0].message.content
-
-Return ONLY JSON, no explanations. Don't return any markdown or json```"""
+        validation_prompt = VALIDATION_PROMPT.format(code=code)
 
         try:
             response = self.client.chat.completions.create(
@@ -317,44 +301,10 @@ Return ONLY JSON, no explanations. Don't return any markdown or json```"""
             return description, function_type, metrics
         
         print("Generating metrics for: ", tool_name)
-        analysis_prompt = f"""Analyze this Python function and determine the most relevant evaluation metrics.
-
-FUNCTION CODE:
-{source_code}
-
-{training_sample}
-
-TASK: Provide a concise analysis and exactly 4 metrics for evaluating this function's output quality.
-
-INSTRUCTIONS:
-1. Analyze what this function does based on its name, code, and purpose
-2. Determine if this is a QUANTITATIVE/ANALYTICAL function or a CREATIVE/CONTENT function
-3. Choose exactly 4 metrics that are most relevant for evaluating this specific tool
-4. For quantitative functions, focus on correctness, completeness, and logical soundness
-5. For creative functions, focus on quality, relevance, and subjective measures
-
-FUNCTION TYPE CLASSIFICATION:
-- QUANTITATIVE/ANALYTICAL: Functions that perform calculations, data analysis, technical analysis, mathematical operations, statistical computations, financial analysis, etc.
-- CREATIVE/CONTENT: Functions that generate text, creative content, marketing materials, essays, stories, etc.
-- PROMPT/TEMPLATE: Pure prompt templates, system messages, instruction strings, or prompt engineering patterns without executable code.
-- CLASSIFICATION: Intent classification, category classification, or classification tasks with expected outputs.
-
-METRICS BY FUNCTION TYPE:
-- Quantitative/Analytical functions: correctness, completeness, accuracy, consistency, precision, logical_soundness, data_coverage, calculation_validity
-- Content/Creative functions: quality, relevance, engagement, authenticity, creativity, coherence, persuasiveness, clarity
-- Prompt/Template functions: clarity, specificity, effectiveness, completeness, instruction_quality, prompt_structure, task_alignment, response_guidance
-- Research tools: accuracy, depth, insight, completeness, relevance, comprehensiveness
-- Classification: accuracy, precision, consistency, confidence
-- Code generation: correctness, completeness, maintainability, readability
-
-Return your response in this exact JSON format:
-{{
-    "function_description": "Brief description of what this function does",
-    "function_type": "quantitative" or "creative" or "prompt" or "classification",
-    "metrics": ["metric1", "metric2", "metric3", "metric4"]
-}}
-
-Be specific and choose metrics that truly matter for this function's output quality."""
+        analysis_prompt = FUNCTION_ANALYSIS_PROMPT.format(
+            source_code=source_code,
+            training_sample=training_sample
+        )
 
         response = self.client.chat.completions.create(
             model=self.model_name,
@@ -364,7 +314,6 @@ Be specific and choose metrics that truly matter for this function's output qual
         print(response.choices[0].message.content)
         
         try:
-            import re
             # Extract JSON from response
             content = response.choices[0].message.content.strip()
             # Clean the response to extract JSON
@@ -417,15 +366,15 @@ CRITICAL: Address all the issues mentioned above in your new implementation.
 
         # Create specialized prompt based on function type
         if function_type == "quantitative" or "analytic" in function_type:
-            evaluation_prompt = self._create_quantitative_evaluator_prompt(
+            evaluation_prompt = get_quantitative_evaluator_prompt(
                 tool_name, function_description, metrics, source_code, training_data, feedback_section
             )
         elif function_type == "prompt" or "template" in function_type or function_type == "classification":
-            evaluation_prompt = self._create_prompt_evaluator_prompt(
+            evaluation_prompt = get_prompt_evaluator_prompt(
                 tool_name, function_description, metrics, source_code, training_data, feedback_section
             )
         else:
-            evaluation_prompt = self._create_content_evaluator_prompt(
+            evaluation_prompt = get_content_evaluator_prompt(
                 tool_name, function_description, metrics, source_code, training_data, feedback_section
             )
 
@@ -562,8 +511,6 @@ CRITICAL: Address all the issues mentioned above in your new implementation.
 
     def _analyze_evaluator(self, evaluator_code: str, tool_dir: Path) -> Dict[str, Any]:
         """Analyze generated evaluator code for issues"""
-        import ast
-        import re
         
         tool_name = tool_dir.name
         tool_file = tool_dir / "evolve_target.py"
@@ -915,518 +862,6 @@ OTHER ISSUES:
             print(f"    🤖 Will regenerate with LLM feedback...")
         
         return False
-
-    def _create_quantitative_evaluator_prompt(self, tool_name: str, function_description: str, 
-                                             metrics: list, source_code: str, training_data: list, 
-                                             feedback_section: str) -> str:
-        """Create specialized prompt for quantitative/analytical functions"""
-        return f"""Create a Python evaluator for OpenEvolve algorithmic tool: {tool_name}
-
-FUNCTION ANALYSIS:
-{function_description}
-
-FUNCTION TYPE: ALGORITHMIC/QUANTITATIVE
-This function performs algorithmic calculations, data analysis, or technical computations. 
-The evaluator should analyze THE FUNCTION IMPLEMENTATION ITSELF, not just outputs.
-
-PRE-DETERMINED METRICS (use these exactly):
-{metrics}
-{feedback_section}
-
-ALGORITHMIC EVALUATION APPROACH:
-For algorithmic functions, evaluation should examine:
-1. IMPLEMENTATION CORRECTNESS: Is the algorithm logic sound?
-2. INPUT HANDLING: Are inputs validated and processed correctly?
-3. CALCULATION ACCURACY: Are mathematical operations implemented properly?
-4. OUTPUT COMPLETENESS: Does output contain all expected components?
-5. ERROR HANDLING: Are edge cases and errors handled appropriately?
-
-CRITICAL REQUIREMENTS:
-1. Function signature: def evaluate(program) -> dict:
-2. Load training data: os.path.join(os.path.dirname(os.path.abspath(__file__)), 'training_data.json')
-3. Import tool: importlib.util.spec_from_file_location("tool_module", program)
-4. READ AND ANALYZE THE SOURCE CODE ITSELF using inspect.getsource()
-5. Call tool with inputs AND analyze the implementation logic
-6. Use LLM to evaluate algorithmic correctness, implementation quality
-
-COMPLETE FUNCTION SOURCE CODE:
-```python
-{source_code}
-```
-
-TRAINING DATA STRUCTURE:
-{json.dumps(training_data[0], indent=2) if training_data else {{}}}
-
-ALGORITHMIC EVALUATION WORKFLOW:
-For each training case:
-1. Extract and analyze the function source code using inspect.getsource()
-2. Call the function with test inputs
-3. Analyze both the IMPLEMENTATION and the OUTPUT
-4. Create comprehensive evaluation examining:
-   - Algorithm logic and correctness
-   - Input parameter handling
-   - Calculation steps and formulas
-   - Output structure and completeness
-   - Error handling and edge cases
-5. Parse LLM response with robust JSON parser
-6. Accumulate scores and return averages
-
-EVALUATION PROMPT TEMPLATE:
-```python
-# Get the actual function source code for analysis
-function_source = inspect.getsource(getattr(tool_module, '{tool_name}'))
-
-eval_prompt = f\\\"\\\"\\\"You are evaluating an ALGORITHMIC/QUANTITATIVE function.
-Analyze BOTH the implementation code AND the output for correctness.
-
-FUNCTION TO EVALUATE: {tool_name}
-INPUT PARAMETERS: {{input_data}}
-FUNCTION SOURCE CODE:
-{{function_source}}
-
-GENERATED OUTPUT: {{generated_content}}
-
-ALGORITHMIC ANALYSIS CRITERIA:
-1. IMPLEMENTATION REVIEW:
-   - Is the algorithm logic mathematically sound?
-   - Are calculations implemented correctly?
-   - Are formulas and computations accurate?
-   - Is input validation adequate?
-
-2. OUTPUT ANALYSIS:
-   - Does output match expected format/structure?
-   - Are calculated values reasonable for given inputs?
-   - Is the output complete with all expected fields?
-
-3. CODE QUALITY:
-   - Are there logical errors in the implementation?
-   - Is error handling appropriate?
-   - Are edge cases considered?
-
-Evaluate on these EXACT metrics (0.0-1.0 scale):
-{chr(10).join([f"- {metric}: Assess this aspect of both code implementation and output" for metric in metrics])}
-
-SCORING GUIDELINES FOR ALGORITHMIC FUNCTIONS:
-- 0.0-0.3: Major algorithmic errors, incorrect implementation, or broken logic
-- 0.4-0.6: Generally correct algorithm but minor implementation issues or incomplete handling
-- 0.7-0.8: Well-implemented algorithm with correct logic and proper output
-- 0.9-1.0: Perfect algorithmic implementation with comprehensive error handling
-
-Focus on the IMPLEMENTATION QUALITY as much as the output correctness.
-Return ONLY JSON with exact metric names.\\\"\\\"\\\"
-```
-
-REQUIRED IMPORTS AND STRUCTURE:
-```python
-import os
-import json
-import importlib.util
-import inspect  # CRITICAL: For analyzing function source code
-import re
-import openai
-import logging
-
-logger = logging.getLogger(__name__)
-EVALUATION_METRICS = {metrics}
-
-def parse_json_response(response_content: str) -> dict:
-    try:
-        content = response_content.strip()
-        if not content:
-            return {{metric: 0.0 for metric in EVALUATION_METRICS}}
-        
-        # Extract JSON from markdown blocks
-        if "```json" in content:
-            content = re.search(r'```json\\s*([^`]+)```', content, re.DOTALL).group(1).strip()
-        elif "```" in content:
-            content = re.search(r'```\\s*([^`]+)```', content, re.DOTALL).group(1).strip()
-        
-        # Parse JSON
-        parsed = json.loads(content)
-        if isinstance(parsed, dict):
-            # Clamp all values to 0.0-1.0 range and return metrics that exist in EVALUATION_METRICS
-            result = {{}}
-            for metric in EVALUATION_METRICS:
-                if metric in parsed:
-                    result[metric] = max(0.0, min(1.0, float(parsed[metric])))
-                else:
-                    result[metric] = 0.0
-            return result
-        
-        return {{metric: 0.0 for metric in EVALUATION_METRICS}}
-    except Exception as e:
-        logger.error(f"JSON parsing error: {{e}}")
-        logger.error(f"Raw response: {{response_content}}")
-        return {{metric: 0.0 for metric in EVALUATION_METRICS}}
-    
-def evaluate(program) -> dict:
-    # Load training data
-    training_data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'training_data.json')
-    with open(training_data_path, 'r') as f:
-        training_data = json.load(f)
-    
-    # Import tool module
-    spec = importlib.util.spec_from_file_location("tool_module", program)
-    tool_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(tool_module)
-    
-    # Get tool function
-    tool_function = getattr(tool_module, '{tool_name}')
-    
-    # CRITICAL: Extract source code for algorithm analysis
-    function_source = inspect.getsource(tool_function)
-    
-    # Initialize OpenAI client
-    client = openai.OpenAI()
-    
-    # Process each test case with BOTH code analysis and output evaluation
-    # [Continue with implementation that analyzes algorithm AND tests outputs]
-```
-
-IMPORTANT: This evaluator must analyze the FUNCTION IMPLEMENTATION ITSELF using inspect.getsource(), 
-not just test the outputs. The LLM should review the actual algorithm code for correctness.
-
-CRITICAL OUTPUT REQUIREMENT:
-Return ONLY valid Python code. No explanations, no markdown code blocks, no text before or after.
-Start with 'import os' and end with the final closing brace of the evaluate function.
-DO NOT include ```python or ``` or any other markdown formatting.
-DO NOT include any explanatory text before or after the code."""
-
-    def _create_prompt_evaluator_prompt(self, tool_name: str, function_description: str, 
-                                      metrics: list, source_code: str, training_data: list, 
-                                      feedback_section: str) -> str:
-        """Create specialized prompt for prompt/template optimization"""
-        return f"""Create a Python evaluator for OpenEvolve prompt optimization tool: {tool_name}
-
-FUNCTION ANALYSIS:
-{function_description}
-
-FUNCTION TYPE: PROMPT/TEMPLATE
-This is a prompt template for LLM optimization. The evaluator must test the prompt by:
-1. Formatting the prompt with training data parameters
-2. Sending the formatted prompt to an LLM
-3. Evaluating the LLM's response quality and prompt effectiveness
-
-PRE-DETERMINED METRICS (use these exactly):
-{metrics}
-
-SPECIAL HANDLING FOR INTENT CLASSIFICATION:
-If this is an intent classification prompt (determines user intent categories), 
-focus primarily on ACCURACY - how well the prompt guides the LLM to classify correctly.
-Compare the LLM output directly with expected_intent for exact match scoring.
-{feedback_section}
-
-CRITICAL REQUIREMENTS FOR PROMPT EVALUATION:
-1. Function signature: def evaluate(program) -> dict:
-2. Load training data: os.path.join(os.path.dirname(os.path.abspath(__file__)), 'training_data.json')  
-3. EXTRACT PROMPT TEMPLATE from the evolve_target.py file
-4. FORMAT prompt with training data parameters (use .format() or f-strings)
-5. SEND formatted prompt to LLM to get response
-6. EVALUATE the LLM response quality with a separate evaluation prompt
-
-PROMPT EXTRACTION AND TESTING WORKFLOW:
-```python
-# 1. Extract the prompt template from the file
-with open(program, 'r') as f:
-    file_content = f.read()
-
-# Find the prompt constant (look for UPPERCASE_VARIABLE = \"\"\"...\"\"\")
-import re
-prompt_match = re.search(r'([A-Z_]+)\\\\s*=\\\\s*\"\"\"(.*?)\"\"\"', file_content, re.DOTALL)
-if prompt_match:
-    prompt_template = prompt_match.group(2).strip()
-
-# 2. For each training case, format and test the prompt
-for test_case in training_data:
-    # Format the prompt with test parameters
-    try:
-        formatted_prompt = prompt_template.format(**test_case)
-    except KeyError:
-        # Handle prompts that don't use .format() - just use as-is
-        formatted_prompt = prompt_template
-    
-    # Send to LLM
-    response = model.invoke([HumanMessage(content=formatted_prompt)])
-    llm_output = response.content
-    
-    # Evaluate the output quality
-    eval_prompt = f\"\"\"Evaluate this prompt and its output...\"\"\"
-```
-
-TRAINING DATA STRUCTURE:
-Training data should contain parameters that the prompt accepts, NOT input/output pairs.
-Expected format: [{{"param1": "value1", "param2": "value2", ...}}]
-Example: {json.dumps(training_data[0], indent=2) if training_data else {{}}}
-
-EVALUATION APPROACH:
-For each test case:
-1. Extract prompt template from evolve_target.py
-2. Format prompt with test case parameters: formatted_prompt = template.format(**test_case)
-3. Send formatted prompt to LLM: response = model.invoke([HumanMessage(content=formatted_prompt)])
-4. Create evaluation prompt to assess both prompt quality AND LLM output
-5. Get evaluation scores and parse JSON response
-
-EVALUATION PROMPT TEMPLATE:
-```python
-eval_prompt = f\\\"\\\"\\\"You are evaluating a PROMPT TEMPLATE and the output it generates.
-
-ORIGINAL PROMPT TEMPLATE:
-{{prompt_template}}
-
-TEST PARAMETERS: {{test_case}}
-FORMATTED PROMPT SENT TO LLM:
-{{formatted_prompt}}
-
-LLM RESPONSE TO THE PROMPT:
-{{llm_output}}
-
-EVALUATION CRITERIA:
-1. PROMPT QUALITY:
-   - Is the prompt clear and well-structured?
-   - Does it provide adequate context and instructions?
-   - Is the language precise and unambiguous?
-
-2. OUTPUT EFFECTIVENESS:
-   - Does the LLM response align with the prompt's intent?
-   - Is the output relevant and appropriate?
-   - Does the prompt successfully guide the LLM behavior?
-
-3. PROMPT ENGINEERING:
-   - Does the prompt handle the input parameters well?
-   - Is the prompt format optimal for LLM understanding?
-   - Could the prompt be improved for better results?
-
-Rate on these EXACT metrics (0.0-1.0 scale):
-{chr(10).join([f"- {metric}: Evaluate prompt effectiveness for this aspect" for metric in metrics])}
-
-SCORING GUIDELINES:
-- 0.0-0.3: Poor prompt design, unclear instructions, ineffective output
-- 0.4-0.6: Adequate prompt but room for improvement
-- 0.7-0.8: Well-crafted prompt producing good results  
-- 0.9-1.0: Exceptional prompt engineering with optimal output
-
-Return ONLY JSON with exact metric names.\\\"\\\"\\\"
-```
-
-COMPLETE EVALUATOR STRUCTURE:
-```python
-import os
-import json
-import re
-import openai
-import logging
-
-logger = logging.getLogger(__name__)
-EVALUATION_METRICS = {metrics}
-
-def parse_json_response(response_content: str) -> dict:
-    try:
-        content = response_content.strip()
-        if not content:
-            return {{metric: 0.0 for metric in EVALUATION_METRICS}}
-        
-        # Extract JSON from markdown blocks
-        if "```json" in content:
-            content = re.search(r'```json\\s*([^`]+)```', content, re.DOTALL).group(1).strip()
-        elif "```" in content:
-            content = re.search(r'```\\s*([^`]+)```', content, re.DOTALL).group(1).strip()
-            
-        parsed = json.loads(content)
-        if isinstance(parsed, dict):
-            result = {{}}
-            for metric in EVALUATION_METRICS:
-                if metric in parsed:
-                    result[metric] = max(0.0, min(1.0, float(parsed[metric])))
-                else:
-                    result[metric] = 0.0
-            return result
-        
-        return {{metric: 0.0 for metric in EVALUATION_METRICS}}
-    except Exception as e:
-        logger.error(f"JSON parsing error: {{e}}")
-        return {{metric: 0.0 for metric in EVALUATION_METRICS}}
-
-def evaluate(program) -> dict:
-    # Load training data  
-    training_data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'training_data.json')
-    with open(training_data_path, 'r') as f:
-        training_data = json.load(f)
-    
-    # Extract prompt template from file
-    with open(program, 'r') as f:
-        file_content = f.read()
-    
-    # Find prompt constant
-    prompt_match = re.search(r'([A-Z_]+)\\\\s*=\\\\s*\"\"\"(.*?)\"\"\"', file_content, re.DOTALL)
-    if not prompt_match:
-        logger.error("Could not find prompt template in file")
-        return {{metric: 0.0 for metric in EVALUATION_METRICS}}
-    
-    prompt_template = prompt_match.group(2).strip()
-    
-    # Initialize OpenAI client
-    client = openai.OpenAI()
-    
-    # Evaluate prompt with each test case
-    scores = {{metric: 0.0 for metric in EVALUATION_METRICS}}
-    num_cases = len(training_data)
-    
-    for test_case in training_data:
-        # Format prompt with parameters
-        try:
-            formatted_prompt = prompt_template.format(**test_case)
-        except:
-            formatted_prompt = prompt_template
-            
-        # Send to LLM
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": formatted_prompt}],
-            temperature=0.0
-        )
-        llm_output = response.choices[0].message.content
-        
-        # Create evaluation prompt
-        eval_prompt = f\"\"\"You are evaluating a PROMPT TEMPLATE and the output it generates.
-
-ORIGINAL PROMPT TEMPLATE:
-{{prompt_template}}
-
-TEST PARAMETERS: {{test_case}}
-FORMATTED PROMPT SENT TO LLM:
-{{formatted_prompt}}
-
-LLM RESPONSE TO THE PROMPT:
-{{llm_output}}
-
-EVALUATION CRITERIA FOR INTENT CLASSIFICATION:
-
-1. ACCURACY ASSESSMENT:
-   - Does the LLM output match the expected_intent exactly?
-   - How reliably does the prompt produce correct classifications?
-   - Are the classification instructions clear enough for consistent results?
-
-2. PROMPT QUALITY (Secondary):
-   - Is the prompt clear and well-structured?
-   - Does it provide adequate context and examples?
-   - Are the intent categories clearly defined?
-
-EVALUATION APPROACH:
-For intent classification, calculate accuracy by comparing LLM output with expected_intent:
-- If LLM output == expected_intent: Contribute 1.0 to accuracy
-- If LLM output != expected_intent: Contribute 0.0 to accuracy
-- Average across all test cases for final accuracy score
-
-Rate on these EXACT metrics (0.0-1.0 scale):
-- accuracy: Primary metric - exact match between LLM output and expected_intent
-- clarity: Secondary metric - how clear are the prompt instructions
-- effectiveness: Secondary metric - overall prompt performance  
-- consistency: Secondary metric - how consistently the prompt performs
-
-Return ONLY JSON with exact metric names.\"\"\"
-        
-        # Get evaluation
-        eval_response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": eval_prompt}],
-            temperature=0.0
-        )
-        case_scores = parse_json_response(eval_response.choices[0].message.content)
-        
-        # Accumulate scores
-        for metric in EVALUATION_METRICS:
-            scores[metric] += case_scores[metric]
-    
-    # Average scores
-    for metric in EVALUATION_METRICS:
-        scores[metric] /= num_cases
-        
-    return scores
-```
-
-IMPORTANT: This evaluator FORMATS the prompt with parameters, SENDS it to an LLM, 
-and EVALUATES the response quality. It does NOT execute functions.
-
-CRITICAL OUTPUT REQUIREMENT:
-Return ONLY valid Python code. No explanations, no markdown code blocks, no text before or after.
-Start with 'import os' and end with the final closing brace of the evaluate function.
-DO NOT include ```python or ``` or any other markdown formatting.
-DO NOT include any explanatory text before or after the code."""
-
-    def _create_content_evaluator_prompt(self, tool_name: str, function_description: str, 
-                                       metrics: list, source_code: str, training_data: list, 
-                                       feedback_section: str) -> str:
-        """Create specialized prompt for creative/content functions"""
-        return f"""Create a Python evaluator for OpenEvolve content tool: {tool_name}
-
-FUNCTION ANALYSIS:
-{function_description}
-
-FUNCTION TYPE: CREATIVE/CONTENT
-This function generates creative content, text, or subjective materials. The evaluator should focus on:
-- Quality and coherence of generated content
-- Relevance to input requirements  
-- Engagement and effectiveness
-- Authenticity and originality
-
-PRE-DETERMINED METRICS (use these exactly):
-{metrics}
-{feedback_section}
-
-CONTENT EVALUATION APPROACH:
-For content functions, evaluation should assess:
-1. QUALITY: Is the content well-written and coherent?
-2. RELEVANCE: Does it meet the specified requirements?
-3. ENGAGEMENT: Is it compelling and interesting?
-4. AUTHENTICITY: Does it feel genuine and original?
-
-CRITICAL REQUIREMENTS:
-1. Function signature: def evaluate(program) -> dict:
-2. Load training data: os.path.join(os.path.dirname(os.path.abspath(__file__)), 'training_data.json')
-3. Import tool: importlib.util.spec_from_file_location("tool_module", program)
-4. Call tool with CORRECT function name: {tool_name}
-5. Use LLM to evaluate content quality subjectively
-
-TOOL FUNCTION SIGNATURE:
-{source_code[source_code.find('def '):source_code.find(':', source_code.find('def '))+1] if 'def ' in source_code else 'def unknown_function():'}
-
-TRAINING DATA STRUCTURE:
-{json.dumps(training_data[0], indent=2) if training_data else {{}}}
-
-CONTENT EVALUATION WORKFLOW:
-For each training case:
-1. Call the main tool function with correct parameters
-2. Handle return value (may be tuple - extract content)
-3. Create SUBJECTIVE EVALUATION prompt focusing on content quality
-4. Parse LLM response with robust JSON parser
-5. Accumulate scores and return averages
-
-EVALUATION PROMPT TEMPLATE:
-```python
-eval_prompt = f\\\"\\\"\\\"You are a STRICT content evaluator. Be critical and harsh in scoring.
-
-Evaluate this generated content on 0.0-1.0 scale:
-
-Generated Content: {{generated_content}}
-Original Request: {{input_data}}
-
-Rate on these EXACT metrics:
-{chr(10).join([f"- {metric}" for metric in metrics])}
-
-Scoring Guidelines for Content:
-- 0.0-0.3: Poor quality, irrelevant, or unusable content
-- 0.4-0.6: Mediocre content (most outputs should score here)  
-- 0.7-0.8: Good quality, relevant, engaging content
-- 0.9-1.0: Exceptional content (very rare)
-
-Be harsh. Most content is mediocre. Return ONLY JSON.\\\"\\\"\\\"
-```
-
-CRITICAL OUTPUT REQUIREMENT:
-Return ONLY valid Python code. No explanations, no markdown code blocks, no text before or after.
-Start with 'import os' and end with the final closing brace of the evaluate function.
-DO NOT include ```python or ``` or any other markdown formatting.
-DO NOT include any explanatory text before or after the code."""
 
 
 def main():
