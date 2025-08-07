@@ -345,100 +345,73 @@ class TraceTracer:
         """Detect prompt definitions in current scope and store them in prompts table. Return prompt ID if a prompt is being used."""
         try:
             import inspect
-            import ast
-            import re
+            import dis
             from datetime import datetime
-            
+
             local_vars = frame.f_locals
             global_vars = frame.f_globals
             filename = frame.f_code.co_filename
-            
-            # Look for prompt-related variable names in the current scope
-            prompt_var_patterns = [
-                'prompt', 'template', 'instruction', 'message', 'system', 'user',
-                'query', 'completion', 'generation', 'chat', 'role', 'persona', 
-                'behavior', 'directive', 'command', 'task', 'request', 'ask',
-                'text', 'content', 'description', 'guideline', 'rule', 'spec'
-            ]
-            
-            all_vars = {**global_vars, **local_vars}
+            func_name = frame.f_code.co_name
+
+            # Get the function object from the frame's globals
+            func_obj = frame.f_globals.get(func_name)
+            if not func_obj:
+                # If not in globals, it might be a method on a class
+                if '.' in func_name:
+                    class_name, method_name = func_name.rsplit('.', 1)
+                    class_obj = frame.f_globals.get(class_name)
+                    if class_obj:
+                        func_obj = getattr(class_obj, method_name, None)
+
+            if not func_obj or not hasattr(func_obj, '__code__'):
+                return None
+
+            # Get global variable names used in the function
+            global_names = [instr.argval for instr in dis.get_instructions(func_obj) if instr.opname == 'LOAD_GLOBAL']
+
             used_prompt_id = None
-            
-            # Get function parameter names to avoid treating them as prompts
-            import inspect
-            try:
-                func_sig = inspect.signature(frame.f_globals.get(frame.f_code.co_name, lambda: None))
-                param_names = set(func_sig.parameters.keys())
-            except:
-                # Fallback: get from the code object
-                param_names = set(frame.f_code.co_varnames[:frame.f_code.co_argcount])
-            
-            # Store all prompt definitions found and detect usage
-            for var_name, var_value in all_vars.items():
-                try:
-                    # Skip non-string values, internal variables, and function parameters
-                    if (not isinstance(var_value, str) or 
-                        var_name.startswith('_') or 
-                        var_name in param_names or
-                        var_name in ['self', 'cls']):
-                        continue
-                        
-                    var_name_lower = var_name.lower()
-                    
-                    # Check if variable name suggests it's a prompt
-                    is_prompt_var = any(pattern in var_name_lower for pattern in prompt_var_patterns)
-                    
-                    # Check content for prompt-like patterns (lowered threshold)
-                    if len(var_value) > 10:
-                        prompt_indicators = [
-                            'you are', 'you will', 'your role', 'your task', 'act as',
-                            'please', 'instruction:', 'system:', 'user:', 'assistant:',
-                            'given the following', 'analyze', 'generate', 'create',
-                            'respond to', 'answer', 'help', 'explain', 'describe',
-                            'summarize', 'write', 'based on', 'considering',
-                            'as a', 'as an', 'i want you', 'can you', 'should you',
-                            'task:', 'goal:', 'objective:', 'context:', 'background:'
-                        ]
-                        
-                        value_lower = var_value.lower()
-                        has_prompt_content = any(ind in value_lower for ind in prompt_indicators)
-                        
-                        if is_prompt_var or has_prompt_content:
-                            # Extract the full code definition
-                            full_code = self._extract_prompt_definition(var_name, filename)
-                            variables = self._extract_template_variables(var_value)
-                            
-                            # Generate unique ID for this prompt
-                            prompt_id = str(uuid.uuid4())
-                            definition_location = f"{filename}:{var_name}"
-                            
-                            # Determine prompt type
-                            prompt_type = self._determine_prompt_type(var_name, var_value, all_vars)
-                            
-                            # Store the prompt definition and get its ID
-                            stored_prompt_id = self._store_prompt_definition(
-                                prompt_id=prompt_id,
-                                prompt_name=var_name,
-                                prompt_type=prompt_type,
-                                definition_location=definition_location,
-                                full_code=full_code,
-                                content=var_value,
-                                variables=variables,
-                                function_signature=None,
-                                enum_values=None
-                            )
-                            
-                            # Check if this prompt is being used in the current function
-                            # Be more aggressive - if we found a prompt in this scope, it's likely being used
-                            if (is_prompt_var or has_prompt_content) and var_name in local_vars:
-                                used_prompt_id = stored_prompt_id
-                                logger.info(f"Prompt '{var_name}' found in local scope, marking as used, ID: {used_prompt_id}")
-                                
-                except Exception:
-                    continue
-            
+
+            for var_name in global_names:
+                var_value = global_vars.get(var_name)
+
+                if isinstance(var_value, str) and len(var_value) > 10:
+                    # Check for prompt-like content
+                    prompt_indicators = [
+                        'you are', 'you will', 'your role', 'your task', 'act as',
+                        'please', 'instruction:', 'system:', 'user:', 'assistant:',
+                        'given the following', 'analyze', 'generate', 'create',
+                        'respond to', 'answer', 'help', 'explain', 'describe',
+                        'summarize', 'write', 'based on', 'considering',
+                        'as a', 'as an', 'i want you', 'can you', 'should you',
+                        'task:', 'goal:', 'objective:', 'context:', 'background:'
+                    ]
+                    value_lower = var_value.lower()
+                    has_prompt_content = any(ind in value_lower for ind in prompt_indicators)
+
+                    if has_prompt_content:
+                        # This is likely a prompt. Store it.
+                        full_code = self._extract_prompt_definition(var_name, filename)
+                        variables = self._extract_template_variables(var_value)
+                        prompt_id = str(uuid.uuid4())
+                        definition_location = f"{filename}:{var_name}"
+                        prompt_type = self._determine_prompt_type(var_name, var_value, global_vars)
+
+                        stored_prompt_id = self._store_prompt_definition(
+                            prompt_id=prompt_id,
+                            prompt_name=var_name,
+                            prompt_type=prompt_type,
+                            definition_location=definition_location,
+                            full_code=full_code,
+                            content=var_value,
+                            variables=variables,
+                            function_signature=None,
+                            enum_values=None
+                        )
+                        used_prompt_id = stored_prompt_id
+                        break # Assume one prompt per function for now
+
             return used_prompt_id
-                    
+
         except Exception as e:
             # Don't let prompt detection break tracing
             return None
@@ -505,86 +478,49 @@ class TraceTracer:
             func_name = frame.f_code.co_name
             conn = sqlite3.connect(self.database_path)
             
-            # Try to find prompts used by this function through execution context analysis
+            # Use a simple approach: look for the most likely prompt in the same module
             print(f"[TRACE] Looking for prompt for function '{func_name}' in module {filename}")
             
-            # Look for evidence of prompt usage in the current execution frame
-            local_vars = frame.f_locals
-            global_vars = frame.f_globals
-            all_vars = {**global_vars, **local_vars}
+            # Get all prompts from this module
+            cursor = conn.execute('''
+                SELECT id, prompt_name, content, usage_count 
+                FROM prompts 
+                WHERE definition_location LIKE ?
+                ORDER BY LENGTH(prompt_name) DESC, usage_count DESC
+            ''', (f"{filename}:%",))
             
-            # Skip global constants - focus on local variables that contain formatted prompts
-            print(f"[TRACE] Analyzing local execution context for prompt usage...")
-            detected_prompt_id = None
-            
-            # Prioritize message variables that likely contain formatted prompts
-            message_vars = [v for v in local_vars.keys() if 'message' in v.lower()]
-            other_local_vars = [v for v in local_vars.keys() if 'message' not in v.lower()]
-            
-            # Check message variables first, then other local variables
-            for var_name in message_vars + other_local_vars:
-                var_value = local_vars[var_name]
-                
-                if isinstance(var_value, str) and len(var_value) > 50:
-                    # Skip if this looks like a raw prompt constant (all caps variable name)
-                    if var_name.isupper() and '_PROMPT' in var_name:
-                        continue
-                        
-                    # Check if this variable content matches any known prompt
-                    cursor = conn.execute('''
-                        SELECT id, prompt_name, content 
-                        FROM prompts 
-                        WHERE definition_location LIKE ?
-                    ''', (f"{filename}:%",))
-                    
-                    for prompt_id, prompt_name, prompt_content in cursor.fetchall():
-                        # Check for partial content match (in case of formatted prompts)
-                        if prompt_content.strip() in var_value or var_value in prompt_content.strip():
-                            detected_prompt_id = prompt_id
-                            print(f"[TRACE] Found prompt '{prompt_name}' being used in local variable '{var_name}'")
-                            logger.info(f"Detected prompt '{prompt_name}' usage in function '{func_name}' via variable analysis")
-                            break
-                
-                # Check message lists that might contain formatted prompts
-                elif hasattr(var_value, '__iter__') and not isinstance(var_value, str):
-                    print(f"[TRACE] Checking message list in variable '{var_name}'")
-                    try:
-                        for i, item in enumerate(var_value):
-                            if hasattr(item, 'content'):
-                                content_str = str(item.content)
-                                print(f"[TRACE] Message {i} content length: {len(content_str)}")
-                                if len(content_str) > 50:
-                                    cursor = conn.execute('''
-                                        SELECT id, prompt_name, content 
-                                        FROM prompts 
-                                        WHERE definition_location LIKE ?
-                                    ''', (f"{filename}:%",))
-                                    
-                                    for prompt_id, prompt_name, prompt_content in cursor.fetchall():
-                                        # Check for content overlap - even if template variables are replaced
-                                        prompt_words = set(prompt_content.split())
-                                        content_words = set(content_str.split())
-                                        overlap = len(prompt_words.intersection(content_words))
-                                        overlap_ratio = overlap / len(prompt_words) if prompt_words else 0
-                                        print(f"[TRACE] Testing '{prompt_name}': {overlap}/{len(prompt_words)} words overlap ({overlap_ratio:.2f})")
-                                        
-                                        if overlap > min(10, len(prompt_words) * 0.3):  # At least 30% word overlap or 10 words
-                                            detected_prompt_id = prompt_id
-                                            print(f"[TRACE] MATCH! Found prompt '{prompt_name}' being used in {var_name} message content")
-                                            logger.info(f"Detected prompt '{prompt_name}' usage in function '{func_name}' via message analysis")
-                                            break
-                                    if detected_prompt_id:
-                                        break
-                    except Exception as ex:
-                        print(f"[TRACE] Error checking message list: {ex}")
-                        continue
-                
-                if detected_prompt_id:
-                    break
-                        
-            if detected_prompt_id:
+            prompts = cursor.fetchall()
+            if not prompts:
                 conn.close()
-                return detected_prompt_id
+                return None
+                
+            # Simple heuristic: try to match function name to prompt name
+            func_words = set(func_name.lower().split('_'))
+            best_match = None
+            best_score = 0
+            
+            for prompt_id, prompt_name, content, usage_count in prompts:
+                prompt_words = set(prompt_name.lower().replace('_prompt', '').split('_'))
+                
+                # Calculate word overlap score
+                common_words = func_words.intersection(prompt_words)
+                if common_words:
+                    score = len(common_words) / max(len(func_words), len(prompt_words))
+                    print(f"[TRACE] '{func_name}' vs '{prompt_name}': common words {common_words}, score {score:.2f}")
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_match = (prompt_id, prompt_name)
+            
+            if best_match and best_score > 0.2:  # At least 20% word overlap
+                print(f"[TRACE] Matched function '{func_name}' to prompt '{best_match[1]}' (score: {best_score:.2f})")
+                conn.close()
+                return best_match[0]
+                    
+            # Fallback: No clear match found, so we return None
+            print(f"[TRACE] No clear match found for function '{func_name}', returning None")
+            conn.close()
+            return None
             
             # Fallback: Find prompts from this file
             cursor = conn.execute('''
@@ -740,22 +676,35 @@ class TraceTracer:
                 if base_name in all_vars:
                     return all_vars[base_name]
         
-        # 5. Partial matching (more sophisticated)
-        var_clean = var_name.replace('_', '').lower()
-        best_match = None
-        best_score = 0
-        
-        for scope_var in all_vars.keys():
-            scope_clean = scope_var.replace('_', '').lower()
+        # 5. Partial matching using SequenceMatcher for better results
+        try:
+            from difflib import SequenceMatcher
             
-            # Calculate similarity score
-            if var_clean in scope_clean or scope_clean in var_clean:
-                score = min(len(var_clean), len(scope_clean)) / max(len(var_clean), len(scope_clean))
-                if score > best_score and len(scope_clean) >= 3:
+            var_clean = var_name.replace('_', '').lower()
+            best_match_value = None
+            best_score = 0.0
+            
+            for scope_var, scope_value in all_vars.items():
+                if not isinstance(scope_var, str) or scope_var.startswith('__'):
+                    continue
+
+                scope_clean = scope_var.replace('_', '').lower()
+                
+                score = SequenceMatcher(None, var_clean, scope_clean).ratio()
+                
+                if score > best_score:
                     best_score = score
-                    best_match = all_vars[scope_var]
+                    best_match_value = scope_value
+            
+            # Use a threshold to ensure match quality
+            if best_score > 0.6:
+                return best_match_value
         
-        return best_match if best_score > 0.5 else None
+        except Exception:
+            # Fallback or log error
+            pass
+
+        return None
     
     def _find_rendered_content(self, prompt_content: str, prompt_variables: dict, variable_values: dict, all_vars: dict) -> str:
         """Enhanced rendered content detection."""
@@ -1055,16 +1004,6 @@ class TraceTracer:
                 
                 # Detect and store prompts in current scope
                 used_prompt_id = self._detect_and_store_prompts(frame)
-                
-                # Additional check: Look for any prompt usage in function that processes messages
-                if not used_prompt_id and func_name in ['chat_response', 'classify_intent', 'improve_draft', 
-                                                         'create_plan', 'research_for_plan', 'generate_essay',
-                                                         'reflect_on_draft', 'research_for_critique', 
-                                                         'research_for_brand', 'generate_brand_guidelines']:
-                    # These functions are known to use prompts, link them if we find prompts in scope
-                    used_prompt_id = self._find_prompt_in_scope(frame)
-                    if used_prompt_id:
-                        print(f"[TRACE] Found prompt {used_prompt_id} for function {func_name}")
                 
                 # Record function entry
                 call_info = {
