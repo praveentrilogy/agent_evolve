@@ -965,14 +965,14 @@ def analyze_prompts(database_path: str = "trace_events.db"):
                 'usage_count': usage_count
             })
         
-        # Get usage patterns
+        # Get usage patterns from prompt_usages table
         cursor = conn.execute('''
-            SELECT p.prompt_name, COUNT(*) as usage_count,
+            SELECT p.prompt_name, COUNT(pu.id) as usage_count,
                    GROUP_CONCAT(DISTINCT t.function_name) as used_in_functions
             FROM prompts p
-            JOIN trace_events t ON p.id = t.used_prompt_id
-            WHERE t.used_prompt_id IS NOT NULL
-            GROUP BY p.prompt_name
+            LEFT JOIN prompt_usages pu ON p.id = pu.prompt_id
+            LEFT JOIN trace_events t ON pu.trace_id = t.trace_id
+            GROUP BY p.prompt_name, p.id
             ORDER BY usage_count DESC
         ''')
         
@@ -981,8 +981,32 @@ def analyze_prompts(database_path: str = "trace_events.db"):
             prompt_name, count, functions = row
             usage_patterns.append({
                 'prompt_name': prompt_name,
-                'usage_count': count,
+                'usage_count': count or 0,
                 'used_in_functions': functions.split(',') if functions else []
+            })
+        
+        # Get detailed usage records
+        cursor = conn.execute('''
+            SELECT pu.id, p.prompt_name, t.function_name, pu.timestamp, 
+                   pu.variable_values, pu.rendered_content
+            FROM prompt_usages pu
+            JOIN prompts p ON pu.prompt_id = p.id
+            JOIN trace_events t ON pu.trace_id = t.trace_id
+            ORDER BY pu.timestamp DESC
+            LIMIT 50
+        ''')
+        
+        recent_usages = []
+        for row in cursor.fetchall():
+            usage_id, prompt_name, function_name, timestamp, var_values_json, rendered = row
+            var_values = json.loads(var_values_json) if var_values_json else {}
+            recent_usages.append({
+                'usage_id': usage_id,
+                'prompt_name': prompt_name,
+                'function_name': function_name,
+                'timestamp': timestamp,
+                'variable_values': var_values,
+                'rendered_content': rendered
             })
         
         conn.close()
@@ -990,7 +1014,8 @@ def analyze_prompts(database_path: str = "trace_events.db"):
         result = {
             'total_prompts': len(prompts),
             'prompts': prompts,
-            'usage_patterns': usage_patterns
+            'usage_patterns': usage_patterns,
+            'recent_usages': recent_usages
         }
         
         logger.info(f"Found {len(prompts)} prompt definitions with usage patterns")
