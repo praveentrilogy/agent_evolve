@@ -139,6 +139,24 @@ class TraceTracer:
             )
         ''')
         
+        # Create functions table to catalog all unique functions
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS functions (
+                id TEXT PRIMARY KEY,
+                function_name TEXT NOT NULL,
+                full_function_name TEXT NOT NULL,
+                class_name TEXT,
+                filename TEXT NOT NULL,
+                module_name TEXT,
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                call_count INTEGER DEFAULT 0,
+                signature TEXT,
+                docstring TEXT,
+                UNIQUE(full_function_name, filename)
+            )
+        ''')
+        
         # Create indexes
         conn.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON trace_events(timestamp)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_function ON trace_events(function_name)')
@@ -146,6 +164,8 @@ class TraceTracer:
         conn.execute('CREATE INDEX IF NOT EXISTS idx_prompt_name ON prompts(prompt_name)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_prompt_usage_trace ON prompt_usages(trace_id)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_prompt_usage_prompt ON prompt_usages(prompt_id)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_function_name ON functions(full_function_name)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_function_file ON functions(filename)')
         
         conn.commit()
         conn.close()
@@ -599,6 +619,12 @@ class TraceTracer:
                 # Update depth
                 self._trace_depth_context.set(current_depth + 1)
                 
+                # Extract class and function information
+                class_name, full_function_name = self._extract_class_and_function_name(frame)
+                
+                # Store function information
+                self._store_function_info(frame, full_function_name, class_name)
+                
                 # Get function arguments
                 args_info = self._get_function_args(frame)
                 
@@ -700,6 +726,122 @@ class TraceTracer:
             pass
         
         return self._trace_function
+    
+    def _extract_class_and_function_name(self, frame) -> tuple:
+        """Extract class name and full function name from frame."""
+        try:
+            func_name = frame.f_code.co_name
+            filename = frame.f_code.co_filename
+            
+            # Try to get class name from frame locals
+            class_name = None
+            local_vars = frame.f_locals
+            
+            # Look for 'self' parameter (instance method)
+            if 'self' in local_vars:
+                self_obj = local_vars['self']
+                class_name = self_obj.__class__.__name__
+            # Look for 'cls' parameter (class method)
+            elif 'cls' in local_vars:
+                cls_obj = local_vars['cls']
+                class_name = cls_obj.__name__
+            else:
+                # Try to infer from qualname if available
+                try:
+                    # Look in globals for the function object
+                    for name, obj in frame.f_globals.items():
+                        if (hasattr(obj, '__code__') and 
+                            obj.__code__ is frame.f_code and
+                            hasattr(obj, '__qualname__') and
+                            '.' in obj.__qualname__):
+                            # qualname like "ClassName.method_name"
+                            parts = obj.__qualname__.split('.')
+                            if len(parts) >= 2:
+                                class_name = '.'.join(parts[:-1])  # Everything except last part
+                            break
+                except Exception:
+                    pass
+            
+            # Create full function name
+            if class_name:
+                full_function_name = f"{class_name}.{func_name}"
+            else:
+                full_function_name = func_name
+                
+            return class_name, full_function_name
+            
+        except Exception as e:
+            logger.error(f"Failed to extract class and function name: {e}")
+            return None, frame.f_code.co_name
+    
+    def _store_function_info(self, frame, full_function_name: str, class_name: str = None):
+        """Store function information in functions table."""
+        try:
+            from datetime import datetime
+            import inspect
+            
+            func_name = frame.f_code.co_name
+            filename = frame.f_code.co_filename
+            
+            # Get module name
+            module_name = self._get_module_name(filename)
+            
+            # Try to extract signature and docstring
+            signature = None
+            docstring = None
+            
+            try:
+                # Look for the actual function object in globals
+                for name, obj in frame.f_globals.items():
+                    if (hasattr(obj, '__code__') and 
+                        obj.__code__ is frame.f_code):
+                        if hasattr(inspect, 'signature'):
+                            try:
+                                signature = str(inspect.signature(obj))
+                            except Exception:
+                                pass
+                        docstring = inspect.getdoc(obj)
+                        break
+            except Exception:
+                pass
+            
+            # Store in database
+            now = datetime.utcnow().isoformat()
+            function_id = str(uuid.uuid4())
+            
+            conn = sqlite3.connect(self.database_path)
+            
+            # Check if function already exists
+            cursor = conn.execute(
+                'SELECT id, call_count FROM functions WHERE full_function_name = ? AND filename = ?',
+                (full_function_name, filename)
+            )
+            existing = cursor.fetchone()
+            
+            if existing:
+                # Update existing function
+                conn.execute('''
+                    UPDATE functions 
+                    SET last_seen = ?, call_count = call_count + 1
+                    WHERE id = ?
+                ''', (now, existing[0]))
+            else:
+                # Insert new function
+                conn.execute('''
+                    INSERT INTO functions 
+                    (id, function_name, full_function_name, class_name, filename, 
+                     module_name, first_seen, last_seen, call_count, signature, docstring)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                ''', (
+                    function_id, func_name, full_function_name, class_name, filename,
+                    module_name, now, now, signature, docstring
+                ))
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"Failed to store function info: {e}")
     
     def _get_raw_string_args(self, frame):
         """Extract raw string arguments from frame for prompt detection."""
