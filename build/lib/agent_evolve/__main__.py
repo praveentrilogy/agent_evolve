@@ -126,26 +126,21 @@ def export_data(db_path: str, output_file: str, format: str = 'json'):
     finally:
         conn.close()
 
-def run_dashboard(base_dir: str = ".agent_evolve", port: int = 8501, host: str = "localhost", version: str = "new"):
+def run_dashboard(base_dir: str = ".agent_evolve", port: int = 8501, host: str = "localhost"):
     """Launch the Streamlit dashboard for visualizing evolution results."""
     try:
         import streamlit.web.cli as stcli
         import sys
         from pathlib import Path
         
-        # Get the dashboard script path based on version
-        if version == "v1":
-            dashboard_script = Path(__file__).parent / "dashboard_v1.py"
-            dashboard_name = "Agent Evolve Dashboard v1"
-        else:
-            dashboard_script = Path(__file__).parent / "dashboard.py"
-            dashboard_name = "Agent Evolve Dashboard"
+        # Get the dashboard script path
+        dashboard_script = Path(__file__).parent / "dashboard.py"
         
         if not dashboard_script.exists():
-            print(f"❌ Dashboard script not found: {dashboard_script}")
+            print("❌ Dashboard script not found")
             return
         
-        print(f"🚀 Starting {dashboard_name}...")
+        print(f"🚀 Starting Agent Evolve Dashboard...")
         print(f"📁 Base directory: {base_dir}")
         print(f"🌐 Server: http://{host}:{port}")
         print(f"💡 Press Ctrl+C to stop the server")
@@ -852,23 +847,14 @@ def main():
     extract_parser.add_argument('--base-dir', default='.agent_evolve',
                                help='Base directory to look for evolved tools (default: .agent_evolve)')
     
-    # Dashboard command (new version)
-    dashboard_parser = subparsers.add_parser('dashboard', help='Launch the new Streamlit dashboard')
+    # Dashboard command
+    dashboard_parser = subparsers.add_parser('dashboard', help='Launch the Streamlit dashboard for visualizing evolution results')
     dashboard_parser.add_argument('--base-dir', default='.agent_evolve',
                                  help='Base directory to look for evolved tools (default: .agent_evolve)')
     dashboard_parser.add_argument('--port', type=int, default=8501,
                                  help='Port to run the dashboard on (default: 8501)')
     dashboard_parser.add_argument('--host', default='localhost',
                                  help='Host to run the dashboard on (default: localhost)')
-    
-    # Dashboard v1 command (old version)
-    dashboard_v1_parser = subparsers.add_parser('dashboard-v1', help='Launch the v1 Streamlit dashboard for visualizing evolution results')
-    dashboard_v1_parser.add_argument('--base-dir', default='.agent_evolve',
-                                    help='Base directory to look for evolved tools (default: .agent_evolve)')
-    dashboard_v1_parser.add_argument('--port', type=int, default=8501,
-                                    help='Port to run the dashboard on (default: 8501)')
-    dashboard_v1_parser.add_argument('--host', default='localhost',
-                                    help='Host to run the dashboard on (default: localhost)')
     
     args = parser.parse_args()
     
@@ -901,8 +887,6 @@ def main():
         asyncio.run(extract_best_versions(args.base_dir))
     elif args.command == 'dashboard':
         run_dashboard(args.base_dir, args.port, args.host)
-    elif args.command == 'dashboard-v1':
-        run_dashboard(args.base_dir, args.port, args.host, version="v1")
 
 if __name__ == '__main__':
     main()
