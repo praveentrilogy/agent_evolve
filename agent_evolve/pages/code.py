@@ -37,7 +37,7 @@ def load_functions_from_db(db_path):
             SELECT id, function_name, full_function_name, class_name, filename, 
                    module_name, first_seen, last_seen, call_count, signature, docstring, marked_for_evolution
             FROM functions 
-            ORDER BY call_count DESC, function_name ASC
+            ORDER BY filename ASC, function_name ASC
         ''')
         
         functions = []
@@ -123,7 +123,42 @@ else:
                 "Evolve",
                 help="Select for evolution",
                 default=False,
-            )
+            ),
+            "Function": st.column_config.TextColumn(
+                "Function",
+                help="Function name",
+                max_chars=50,
+            ),
+            "Class": st.column_config.TextColumn(
+                "Class",
+                help="Class name",
+                max_chars=30,
+            ),
+            "Module": st.column_config.TextColumn(
+                "Module",
+                help="Module name",
+                max_chars=50,
+            ),
+            "File": st.column_config.TextColumn(
+                "File",
+                help="File name",
+                max_chars=50,
+            ),
+            "Call Count": st.column_config.NumberColumn(
+                "Call Count",
+                help="Number of times called",
+                format="%d",
+            ),
+            "First Seen": st.column_config.TextColumn(
+                "First Seen",
+                help="First time seen",
+                max_chars=20,
+            ),
+            "Last Seen": st.column_config.TextColumn(
+                "Last Seen",
+                help="Last time seen",
+                max_chars=20,
+            ),
         },
         disabled=["Function", "Class", "Module", "File", "Call Count", "First Seen", "Last Seen"],
         hide_index=True,

@@ -27,6 +27,43 @@ else:
     st.sidebar.caption(f"Expected: {db_path}")
 
 
+def get_prompt_usage(prompt_id: str) -> list:
+    """Get usage records for a specific prompt"""
+    import sqlite3
+    
+    conn = sqlite3.connect('agent_rl/backend/data/graph.db')
+    cursor = conn.execute('''
+        SELECT 
+            pu.timestamp,
+            te.function_name,
+            pu.variable_values,
+            pu.rendered_content
+        FROM prompt_usages pu
+        LEFT JOIN trace_events te ON te.id = (
+            SELECT id FROM trace_events 
+            WHERE trace_id = pu.trace_id 
+            AND event_type = 'call'
+            ORDER BY timestamp DESC
+            LIMIT 1
+        )
+        WHERE pu.prompt_id = ?
+        ORDER BY pu.timestamp DESC
+        LIMIT 10
+    ''', (prompt_id,))
+    
+    usage_records = []
+    for row in cursor.fetchall():
+        timestamp, function_name, variable_values, rendered_content = row
+        usage_records.append({
+            'timestamp': timestamp,
+            'function_name': function_name or 'unknown',
+            'variable_values': variable_values,
+            'rendered_content': rendered_content
+        })
+    
+    conn.close()
+    return usage_records
+
 def load_prompts_from_db(db_path):
     """Load all prompts from the database."""
     try:
@@ -39,7 +76,7 @@ def load_prompts_from_db(db_path):
                    content, variables, function_signature, enum_values, 
                    created_at, last_seen, usage_count, marked_for_evolution
             FROM prompts 
-            ORDER BY usage_count DESC, prompt_name ASC
+            ORDER BY definition_location ASC, prompt_name ASC
         ''')
         
         prompts = []
@@ -130,7 +167,47 @@ else:
                 "Evolve",
                 help="Select for evolution",
                 default=False,
-            )
+            ),
+            "Name": st.column_config.TextColumn(
+                "Name",
+                help="Prompt name",
+                max_chars=50,
+            ),
+            "Type": st.column_config.TextColumn(
+                "Type",
+                help="Prompt type",
+                max_chars=20,
+            ),
+            "Usage Count": st.column_config.NumberColumn(
+                "Usage Count",
+                help="Number of times used",
+                format="%d",
+            ),
+            "Variables": st.column_config.TextColumn(
+                "Variables",
+                help="Template variables",
+                max_chars=50,
+            ),
+            "Location": st.column_config.TextColumn(
+                "Location",
+                help="File location",
+                max_chars=100,
+            ),
+            "Content Preview": st.column_config.TextColumn(
+                "Content Preview",
+                help="Preview of prompt content",
+                max_chars=150,
+            ),
+            "First Seen": st.column_config.TextColumn(
+                "First Seen",
+                help="First time seen",
+                max_chars=20,
+            ),
+            "Last Seen": st.column_config.TextColumn(
+                "Last Seen",
+                help="Last time seen",
+                max_chars=20,
+            ),
         },
         disabled=["Name", "Type", "Usage Count", "Variables", "Location", "Content Preview", "First Seen", "Last Seen"],
         hide_index=True,
@@ -205,3 +282,27 @@ else:
             
             st.write(f"**First Seen:** {prompt['created_at'][:19]}")
             st.write(f"**Last Seen:** {prompt['last_seen'][:19]}")
+            
+            # Add prompt usage details
+            st.subheader("Recent Usage")
+            usage_data = get_prompt_usage(prompt['id'])
+            if usage_data:
+                for usage in usage_data[:5]:  # Show last 5 usages
+                    with st.expander(f"Used in {usage['function_name']} at {usage['timestamp'][:19]}"):
+                        if usage['variable_values']:
+                            st.write("**Variable Values:**")
+                            import json
+                            try:
+                                var_values = json.loads(usage['variable_values'])
+                                for var_name, var_value in var_values.items():
+                                    st.code(f"{var_name} = {var_value}", language='python')
+                            except:
+                                st.text(usage['variable_values'])
+                        
+                        if usage['rendered_content']:
+                            st.write("**Rendered Content:**")
+                            st.text_area("", value=usage['rendered_content'], height=200, disabled=True, key=f"rendered_{usage['timestamp']}")
+                        else:
+                            st.write("No rendered content available.")
+            else:
+                st.write("No usage records found.")

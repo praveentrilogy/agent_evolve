@@ -339,7 +339,7 @@ class TraceTracer:
             return {'error': f'serialization_failed: {str(e)}', 'type': str(type(obj))}
     
     def _detect_and_store_prompts(self, frame) -> str:
-        """Detect prompt definitions in current scope and store them in prompts table. Don't link to specific usage."""
+        """Detect prompt definitions in current scope and store them in prompts table. Return prompt ID if a prompt is being used."""
         try:
             import inspect
             import ast
@@ -359,12 +359,25 @@ class TraceTracer:
             ]
             
             all_vars = {**global_vars, **local_vars}
+            used_prompt_id = None
             
-            # Just store all prompt definitions found (don't try to link to specific usage)
+            # Get function parameter names to avoid treating them as prompts
+            import inspect
+            try:
+                func_sig = inspect.signature(frame.f_globals.get(frame.f_code.co_name, lambda: None))
+                param_names = set(func_sig.parameters.keys())
+            except:
+                # Fallback: get from the code object
+                param_names = set(frame.f_code.co_varnames[:frame.f_code.co_argcount])
+            
+            # Store all prompt definitions found and detect usage
             for var_name, var_value in all_vars.items():
                 try:
-                    # Skip non-string values and internal variables
-                    if not isinstance(var_value, str) or var_name.startswith('_'):
+                    # Skip non-string values, internal variables, and function parameters
+                    if (not isinstance(var_value, str) or 
+                        var_name.startswith('_') or 
+                        var_name in param_names or
+                        var_name in ['self', 'cls']):
                         continue
                         
                     var_name_lower = var_name.lower()
@@ -399,8 +412,8 @@ class TraceTracer:
                             # Determine prompt type
                             prompt_type = self._determine_prompt_type(var_name, var_value, all_vars)
                             
-                            # Just store the prompt definition - don't link to usage
-                            self._store_prompt_definition(
+                            # Store the prompt definition and get its ID
+                            stored_prompt_id = self._store_prompt_definition(
                                 prompt_id=prompt_id,
                                 prompt_name=var_name,
                                 prompt_type=prompt_type,
@@ -411,17 +424,140 @@ class TraceTracer:
                                 function_signature=None,
                                 enum_values=None
                             )
+                            
+                            # Check if this prompt is being used in the current function
+                            # Be more aggressive - if we found a prompt in this scope, it's likely being used
+                            if (is_prompt_var or has_prompt_content) and var_name in local_vars:
+                                used_prompt_id = stored_prompt_id
+                                logger.info(f"Prompt '{var_name}' found in local scope, marking as used, ID: {used_prompt_id}")
                                 
                 except Exception:
                     continue
             
-            # Don't try to link specific prompts to usage - just return None
-            # The prompt_usages table should be populated differently
-            return None
+            return used_prompt_id
                     
         except Exception as e:
             # Don't let prompt detection break tracing
             return None
+    
+    def _is_prompt_being_used(self, frame, var_name, var_value):
+        """Check if a prompt is being actively used in the current function call."""
+        try:
+            # Check if the prompt variable is in the function arguments
+            local_vars = frame.f_locals
+            
+            # More aggressive detection - if a prompt exists in local scope, assume it's being used
+            # Check if our prompt value appears anywhere in the local variables
+            for local_var_name, local_var_value in local_vars.items():
+                if local_var_value == var_value:
+                    logger.info(f"Prompt '{var_name}' detected in use as '{local_var_name}'")
+                    return True
+                    
+                # Check if it's a formatted/modified version of the prompt
+                if isinstance(local_var_value, str) and isinstance(var_value, str) and len(var_value) > 20:
+                    # Check various ways the prompt might be used
+                    if (var_value in local_var_value or  # Direct substring
+                        ('{' in var_value and var_value.split('{')[0] in local_var_value) or  # Template prefix
+                        (len(local_var_value) > 50 and len(var_value) > 50 and 
+                         local_var_value[:50] == var_value[:50])):  # Same beginning
+                        logger.info(f"Prompt '{var_name}' detected in use (formatted)")
+                        return True
+            
+            # Check if it's being passed to common LLM/prompt-related functions
+            llm_functions = [
+                'generate', 'complete', 'chat', 'respond', 'invoke', 
+                'call', 'run', 'execute', 'send', 'format', 'render',
+                'process', 'handle', 'create_message', 'send_message',
+                'langchain', 'openai', 'anthropic', 'llm', 'prompt',
+                'research', 'improve', 'create', 'reflect', 'classify'
+            ]
+            
+            # Check if the current function name suggests LLM usage
+            func_name = frame.f_code.co_name.lower()
+            if any(pattern in func_name for pattern in llm_functions):
+                # If we're in a prompt-related function and the prompt is in scope, it's likely being used
+                if var_name in local_vars or var_value in str(local_vars.values()):
+                    logger.info(f"Prompt '{var_name}' detected in use in function '{func_name}'")
+                    return True
+            
+            # Also check for specific patterns in your codebase
+            # If the prompt is passed as 'messages' parameter (common in chat APIs)
+            if 'messages' in local_vars:
+                messages_str = str(local_vars['messages'])
+                if var_value in messages_str:
+                    logger.info(f"Prompt '{var_name}' detected in messages")
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking prompt usage: {e}")
+            return False
+    
+    def _find_prompt_in_scope(self, frame):
+        """Find any prompt that might be in scope for known prompt-using functions."""
+        try:
+            # Look up the prompts table for prompts from this module
+            filename = frame.f_code.co_filename
+            func_name = frame.f_code.co_name
+            conn = sqlite3.connect(self.database_path)
+            
+            # Map functions to their known prompts
+            function_prompt_map = {
+                'classify_intent': 'ORCHESTRATOR_PROMPT',
+                'chat_response': 'CHATBOT_PROMPT',
+                'improve_draft': 'IMPROVE_AND_REWRITE_DRAFT_PROMPT',
+                'create_plan': 'PLAN_PROMPT',
+                'generate_essay': 'WRITER_PROMPT',
+                'reflect_on_draft': 'REFLECTION_PROMPT',
+                'research_for_plan': 'RESEARCH_PLAN_PROMPT',
+                'research_for_critique': 'RESEARCH_CRITIQUE_PROMPT',
+                'research_for_brand': 'BRAND_RESEARCH_PROMPT',
+                'generate_brand_guidelines': 'BRAND_GUIDELINES_GENERATION_PROMPT'
+            }
+            
+            # Check if this function has a known prompt
+            print(f"[TRACE] Looking for prompt for function '{func_name}'")
+            if func_name in function_prompt_map:
+                prompt_name = function_prompt_map[func_name]
+                print(f"[TRACE] Function '{func_name}' maps to prompt '{prompt_name}'")
+                cursor = conn.execute('''
+                    SELECT id FROM prompts 
+                    WHERE prompt_name = ?
+                    LIMIT 1
+                ''', (prompt_name,))
+                
+                result = cursor.fetchone()
+                if result:
+                    prompt_id = result[0]
+                    print(f"[TRACE] Found prompt ID {prompt_id} for '{prompt_name}'")
+                    logger.info(f"Matched prompt '{prompt_name}' to function '{func_name}'")
+                    conn.close()
+                    return prompt_id
+                else:
+                    print(f"[TRACE] No prompt found with name '{prompt_name}'")
+            
+            # Fallback: Find prompts from this file
+            cursor = conn.execute('''
+                SELECT id, prompt_name, content 
+                FROM prompts 
+                WHERE definition_location LIKE ?
+                ORDER BY usage_count DESC
+                LIMIT 1
+            ''', (f"{filename}:%",))
+            
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result:
+                prompt_id, prompt_name, content = result
+                logger.info(f"Found prompt '{prompt_name}' for function {func_name}")
+                return prompt_id
+                
+        except Exception as e:
+            logger.error(f"Error finding prompt in scope: {e}")
+            
+        return None
     
     def _extract_prompt_definition(self, var_name: str, filename: str) -> str:
         """Extract the full code definition of a prompt variable from source file."""
@@ -520,6 +656,198 @@ class TraceTracer:
             
         return variables
     
+    def _store_prompt_usage(self, event_id: str, prompt_id: str, trace_id: str, function_name: str, frame=None):
+        """Store prompt usage in the prompt_usages table."""
+        try:
+            from datetime import datetime
+            
+            print(f"[TRACE] _store_prompt_usage called with prompt_id={prompt_id}, function={function_name}")
+            
+            conn = sqlite3.connect(self.database_path)
+            usage_id = str(uuid.uuid4())
+            now = datetime.utcnow().isoformat()
+            
+            # Check if prompt exists and get its content
+            cursor = conn.execute('SELECT id, prompt_name, content, variables FROM prompts WHERE id = ?', (prompt_id,))
+            result = cursor.fetchone()
+            if not result:
+                print(f"[TRACE] ERROR: Prompt {prompt_id} not found in prompts table")
+                logger.warning(f"Prompt {prompt_id} not found in prompts table")
+                conn.close()
+                return
+            
+            prompt_id_db, prompt_name, prompt_content, prompt_variables_json = result
+            print(f"[TRACE] Found prompt: {prompt_name}")
+            
+            # Extract variable values and rendered content if we have frame context
+            variable_values = {}
+            rendered_content = prompt_content  # Default to original content
+            prompt_variables = {}
+            
+            if frame:
+                try:
+                    local_vars = frame.f_locals
+                    global_vars = frame.f_globals
+                    all_vars = {**global_vars, **local_vars}
+                    
+                    print(f"[TRACE] Available variables in scope: {list(local_vars.keys())}")
+                    
+                    # Parse template variables if they exist
+                    if prompt_variables_json:
+                        prompt_variables = json.loads(prompt_variables_json)
+                        print(f"[TRACE] Template variables to find: {prompt_variables}")
+                        
+                        # Look for template variables in the execution context
+                        for var_name, var_type in prompt_variables.items():
+                            found_value = None
+                            found_var_name = None
+                            
+                            # Direct match
+                            if var_name in all_vars:
+                                found_value = all_vars[var_name]
+                                found_var_name = var_name
+                            else:
+                                # Look for similar variable names or mappings
+                                # For 'content', also look for 'content_text'
+                                if var_name == 'content' and 'content_text' in all_vars:
+                                    found_value = all_vars['content_text']
+                                    found_var_name = 'content_text'
+                                # For other variables, try variations
+                                elif var_name + '_text' in all_vars:
+                                    found_value = all_vars[var_name + '_text']
+                                    found_var_name = var_name + '_text'
+                                elif var_name + '_str' in all_vars:
+                                    found_value = all_vars[var_name + '_str']
+                                    found_var_name = var_name + '_str'
+                            
+                            if found_value is not None:
+                                # Store the full variable value without truncation
+                                value_str = str(found_value)
+                                variable_values[var_name] = value_str
+                                print(f"[TRACE] Found variable {var_name} (from {found_var_name}) = {value_str[:100]}... (length: {len(value_str)})")
+                            else:
+                                print(f"[TRACE] Variable {var_name} not found in scope")
+                    else:
+                        print(f"[TRACE] No template variables defined for this prompt")
+                    
+                    # Try to find rendered content more reliably
+                    # If we have template variables, try to render the prompt ourselves first
+                    if variable_values and prompt_variables:
+                        try:
+                            # Attempt to format the prompt with the captured variables
+                            rendered_content = prompt_content.format(**variable_values)
+                            print(f"[TRACE] Successfully rendered prompt using captured variables")
+                        except (KeyError, ValueError) as e:
+                            print(f"[TRACE] Could not render prompt with variables: {e}")
+                            rendered_content = prompt_content  # Fallback to original
+                    
+                    # If we couldn't render it ourselves, look for it in the execution context
+                    if rendered_content == prompt_content:
+                        # Look for variables that contain the prompt content
+                        for var_name, var_value in all_vars.items():
+                            if var_name in ['messages', 'prompt', 'system_message', 'user_message', 'generation_messages', 
+                                          'plan_messages', 'chat_messages', 'improvement_messages', 'reflection_messages',
+                                          'classification_messages', 'research_messages', 'guidelines_messages']:
+                                print(f"[TRACE] Checking {var_name} for rendered content")
+                                
+                                # Check string variables
+                                if isinstance(var_value, str) and len(var_value) >= len(prompt_content):
+                                    # For template prompts, check if placeholders are replaced
+                                    if prompt_variables:
+                                        # Check if all template variables appear to be replaced
+                                        template_vars_replaced = True
+                                        for template_var in prompt_variables.keys():
+                                            placeholder = "{" + template_var + "}"
+                                            if placeholder in var_value:
+                                                template_vars_replaced = False
+                                                break
+                                        
+                                        if template_vars_replaced and any(template_var in prompt_content for template_var in prompt_variables.keys()):
+                                            rendered_content = var_value
+                                            print(f"[TRACE] Found rendered content in {var_name} (template vars replaced)")
+                                            break
+                                    else:
+                                        # For non-template prompts, check if the prompt content appears in the variable
+                                        # Use a simple substring check for exact matches
+                                        if prompt_content.strip() in var_value:
+                                            rendered_content = var_value
+                                            print(f"[TRACE] Found rendered content in {var_name} (exact content match)")
+                                            break
+                                
+                                # Check list/message collections
+                                elif hasattr(var_value, '__iter__') and not isinstance(var_value, str):
+                                    try:
+                                        for item in var_value:
+                                            content_str = None
+                                            
+                                            # Look for message content attribute
+                                            if hasattr(item, 'content'):
+                                                content_str = str(item.content)
+                                            else:
+                                                content_str = str(item)
+                                                
+                                            if content_str and len(content_str) >= len(prompt_content):
+                                                # For template prompts, check if placeholders are replaced
+                                                if prompt_variables:
+                                                    template_vars_replaced = True
+                                                    for template_var in prompt_variables.keys():
+                                                        placeholder = "{" + template_var + "}"
+                                                        if placeholder in content_str:
+                                                            template_vars_replaced = False
+                                                            break
+                                                    
+                                                    if template_vars_replaced and any(template_var in prompt_content for template_var in prompt_variables.keys()):
+                                                        rendered_content = content_str
+                                                        print(f"[TRACE] Found rendered content in {var_name} message.content (template vars replaced)")
+                                                        break
+                                                else:
+                                                    # For non-template prompts, check for exact content match
+                                                    if prompt_content.strip() in content_str:
+                                                        rendered_content = content_str
+                                                        print(f"[TRACE] Found rendered content in {var_name} message.content (exact content match)")
+                                                        break
+                                    except Exception as ex:
+                                        print(f"[TRACE] Error checking {var_name}: {ex}")
+                                
+                                # Break if we found rendered content
+                                if rendered_content != prompt_content:
+                                    break
+                                
+                except Exception as e:
+                    print(f"[TRACE] Error extracting variables: {e}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # Debug the rendered content before storing
+            print(f"[TRACE] Original prompt_content length: {len(prompt_content)}")
+            print(f"[TRACE] Rendered content length: {len(rendered_content) if rendered_content else 0}")
+            print(f"[TRACE] Are they equal? {rendered_content == prompt_content if rendered_content else False}")
+            
+            # Store the full rendered content without size limits
+            
+            # Insert usage record with correct schema
+            conn.execute('''
+                INSERT INTO prompt_usages 
+                (id, trace_id, prompt_id, timestamp, variable_values, rendered_content)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                usage_id, trace_id, prompt_id, now,
+                json.dumps(variable_values) if variable_values else json.dumps({}),
+                rendered_content  # Always store rendered content, even if same as original
+            ))
+            
+            conn.commit()
+            conn.close()
+            print(f"[TRACE] Successfully stored prompt usage: {usage_id} for prompt {prompt_id}")
+            print(f"[TRACE] Variables captured: {variable_values}")
+            logger.info(f"Successfully stored prompt usage: {usage_id} for prompt {prompt_id}")
+            
+        except Exception as e:
+            print(f"[TRACE] ERROR storing prompt usage: {e}")
+            logger.error(f"Failed to store prompt usage: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def _determine_prompt_type(self, var_name: str, content: str, all_vars: dict) -> str:
         """Determine the type of prompt (variable, function, enum)."""
         # Check if it's from an enum
@@ -600,6 +928,11 @@ class TraceTracer:
             module_name = self._get_module_name(filename)
             thread_id = str(threading.current_thread().ident)
             
+            # Special handling for module-level code execution
+            if func_name == '<module>':
+                # Detect and store prompts at module level
+                self._detect_and_store_prompts(frame)
+            
             if event == "call":
                 # Get or create trace_id using context vars
                 current_trace_id = self._trace_id_context.get()
@@ -631,6 +964,16 @@ class TraceTracer:
                 # Detect and store prompts in current scope
                 used_prompt_id = self._detect_and_store_prompts(frame)
                 
+                # Additional check: Look for any prompt usage in function that processes messages
+                if not used_prompt_id and func_name in ['chat_response', 'classify_intent', 'improve_draft', 
+                                                         'create_plan', 'research_for_plan', 'generate_essay',
+                                                         'reflect_on_draft', 'research_for_critique', 
+                                                         'research_for_brand', 'generate_brand_guidelines']:
+                    # These functions are known to use prompts, link them if we find prompts in scope
+                    used_prompt_id = self._find_prompt_in_scope(frame)
+                    if used_prompt_id:
+                        print(f"[TRACE] Found prompt {used_prompt_id} for function {func_name}")
+                
                 # Record function entry
                 call_info = {
                     'id': str(uuid.uuid4()),
@@ -644,8 +987,9 @@ class TraceTracer:
                     'thread_id': thread_id,
                     'start_time': time.time(),
                     'args': args_info,
-                    'used_prompt_id': None,  # Removed since we can't reliably link prompts to usage
+                    'used_prompt_id': used_prompt_id,
                     'depth': current_depth,
+                    'frame': frame,  # Store frame for later variable extraction
                 }
                 
                 # Store in call stack for return handling
@@ -675,11 +1019,21 @@ class TraceTracer:
                         'args': call_info['args'],
                         'result': self._serialize_safely(arg),
                         'success': True,
-                        'used_prompt_id': None,  # Removed since we can't reliably link prompts to usage
+                        'used_prompt_id': call_info.get('used_prompt_id'),
                         'metadata': {'depth': call_info.get('depth', 0)}
                     }
                     
-                    # No prompt usage linking since we can't reliably determine which prompt is used
+                    # If a prompt was used, record it in prompt_usages table
+                    if call_info.get('used_prompt_id'):
+                        print(f"[TRACE] Recording prompt usage for function {func_name} with prompt {call_info['used_prompt_id']}")
+                        logger.info(f"Recording prompt usage for function {func_name} with prompt {call_info['used_prompt_id']}")
+                        self._store_prompt_usage(
+                            call_info['id'], 
+                            call_info['used_prompt_id'],
+                            call_info['trace_id'],
+                            func_name,
+                            call_info.get('frame')  # Pass frame for variable extraction
+                        )
                     
                     self._event_queue.put(event_data)
                     
