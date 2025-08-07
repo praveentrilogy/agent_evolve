@@ -319,7 +319,7 @@ class TraceTracer:
             return {'error': f'serialization_failed: {str(e)}', 'type': str(type(obj))}
     
     def _detect_and_store_prompts(self, frame) -> str:
-        """Detect prompt definitions in current scope and store them in prompts table. Returns prompt_id if found."""
+        """Detect prompt definitions in current scope and store them in prompts table. Don't link to specific usage."""
         try:
             import inspect
             import ast
@@ -333,12 +333,14 @@ class TraceTracer:
             # Look for prompt-related variable names in the current scope
             prompt_var_patterns = [
                 'prompt', 'template', 'instruction', 'message', 'system', 'user',
-                'query', 'completion', 'generation', 'chat'
+                'query', 'completion', 'generation', 'chat', 'role', 'persona', 
+                'behavior', 'directive', 'command', 'task', 'request', 'ask',
+                'text', 'content', 'description', 'guideline', 'rule', 'spec'
             ]
             
             all_vars = {**global_vars, **local_vars}
-            used_prompt_id = None
             
+            # Just store all prompt definitions found (don't try to link to specific usage)
             for var_name, var_value in all_vars.items():
                 try:
                     # Skip non-string values and internal variables
@@ -350,12 +352,16 @@ class TraceTracer:
                     # Check if variable name suggests it's a prompt
                     is_prompt_var = any(pattern in var_name_lower for pattern in prompt_var_patterns)
                     
-                    # Check content for prompt-like patterns
-                    if len(var_value) > 20:
+                    # Check content for prompt-like patterns (lowered threshold)
+                    if len(var_value) > 10:
                         prompt_indicators = [
                             'you are', 'you will', 'your role', 'your task', 'act as',
                             'please', 'instruction:', 'system:', 'user:', 'assistant:',
-                            'given the following', 'analyze', 'generate', 'create'
+                            'given the following', 'analyze', 'generate', 'create',
+                            'respond to', 'answer', 'help', 'explain', 'describe',
+                            'summarize', 'write', 'based on', 'considering',
+                            'as a', 'as an', 'i want you', 'can you', 'should you',
+                            'task:', 'goal:', 'objective:', 'context:', 'background:'
                         ]
                         
                         value_lower = var_value.lower()
@@ -373,7 +379,7 @@ class TraceTracer:
                             # Determine prompt type
                             prompt_type = self._determine_prompt_type(var_name, var_value, all_vars)
                             
-                            # Store in prompts table
+                            # Just store the prompt definition - don't link to usage
                             self._store_prompt_definition(
                                 prompt_id=prompt_id,
                                 prompt_name=var_name,
@@ -382,19 +388,17 @@ class TraceTracer:
                                 full_code=full_code,
                                 content=var_value,
                                 variables=variables,
-                                function_signature=None,  # Will be set if it's a function-generated prompt
-                                enum_values=None         # Will be set if it's an enum prompt
+                                function_signature=None,
+                                enum_values=None
                             )
-                            
-                            # Return the first prompt ID found (for linking to trace)
-                            if used_prompt_id is None:
-                                used_prompt_id = prompt_id
                                 
                 except Exception:
                     continue
-                    
-            return used_prompt_id
             
+            # Don't try to link specific prompts to usage - just return None
+            # The prompt_usages table should be populated differently
+            return None
+                    
         except Exception as e:
             # Don't let prompt detection break tracing
             return None
@@ -536,7 +540,9 @@ class TraceTracer:
                     SET last_seen = ?, usage_count = usage_count + 1
                     WHERE id = ?
                 ''', (now, existing[0]))
-                prompt_id = existing[0]
+                conn.commit()
+                conn.close()
+                return existing[0]  # Return the existing prompt_id
             else:
                 # Insert new prompt
                 conn.execute('''
@@ -552,9 +558,9 @@ class TraceTracer:
                     now, now
                 ))
             
-            conn.commit()
-            conn.close()
-            return prompt_id
+                conn.commit()
+                conn.close()
+                return prompt_id
             
         except Exception as e:
             logger.error(f"Failed to store prompt definition: {e}")
@@ -612,7 +618,7 @@ class TraceTracer:
                     'thread_id': thread_id,
                     'start_time': time.time(),
                     'args': args_info,
-                    'used_prompt_id': used_prompt_id,
+                    'used_prompt_id': None,  # Removed since we can't reliably link prompts to usage
                     'depth': current_depth,
                 }
                 
@@ -643,20 +649,13 @@ class TraceTracer:
                         'args': call_info['args'],
                         'result': self._serialize_safely(arg),
                         'success': True,
-                        'used_prompt_id': call_info.get('used_prompt_id'),
+                        'used_prompt_id': None,  # Removed since we can't reliably link prompts to usage
                         'metadata': {'depth': call_info.get('depth', 0)}
                     }
                     
-                    self._event_queue.put(event_data)
+                    # No prompt usage linking since we can't reliably determine which prompt is used
                     
-                    # Store prompt usage if a prompt was used
-                    if call_info.get('used_prompt_id'):
-                        self._store_prompt_usage(
-                            trace_id=call_info['trace_id'],
-                            prompt_id=call_info['used_prompt_id'],
-                            variable_values=self._extract_variable_values(call_info['args']),
-                            rendered_content=None  # Could be enhanced to show final rendered prompt
-                        )
+                    self._event_queue.put(event_data)
                     
                     # Decrease depth
                     current_depth = self._trace_depth_context.get()
@@ -686,7 +685,7 @@ class TraceTracer:
                         'args': call_info['args'],
                         'error': str(arg),
                         'success': False,
-                        'used_prompt_id': call_info.get('used_prompt_id'),
+                        'used_prompt_id': None,  # Removed since we can't reliably link prompts to usage
                         'metadata': {'depth': call_info.get('depth', 0)}
                     }
                     
@@ -701,65 +700,6 @@ class TraceTracer:
             pass
         
         return self._trace_function
-    
-    def _store_prompt_usage(self, trace_id: str, prompt_id: str, variable_values: dict, rendered_content: str = None):
-        """Store a prompt usage record in the prompt_usages table."""
-        try:
-            from datetime import datetime
-            
-            usage_id = str(uuid.uuid4())
-            timestamp = datetime.utcnow().isoformat()
-            
-            conn = sqlite3.connect(self.database_path)
-            conn.execute('''
-                INSERT INTO prompt_usages 
-                (id, trace_id, prompt_id, timestamp, variable_values, rendered_content)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                usage_id,
-                trace_id,
-                prompt_id,
-                timestamp,
-                json.dumps(variable_values) if variable_values else None,
-                rendered_content
-            ))
-            conn.commit()
-            conn.close()
-            
-        except Exception as e:
-            logger.error(f"Failed to store prompt usage: {e}")
-    
-    def _extract_variable_values(self, args: dict) -> dict:
-        """Extract variable values that might be used in prompt templates."""
-        variable_values = {}
-        
-        try:
-            for arg_name, arg_value in args.items():
-                # Only capture string values that look like they might be template variables
-                if isinstance(arg_value, str) and len(arg_value) > 0:
-                    # Common template variable names
-                    template_var_names = [
-                        'brand_guidelines', 'task', 'plan', 'draft', 'critique', 'research',
-                        'content', 'message', 'text', 'input', 'data', 'context',
-                        'current_date', 'brand_input', 'query', 'instruction'
-                    ]
-                    
-                    if arg_name.lower() in template_var_names:
-                        variable_values[arg_name] = arg_value[:500]  # Limit length for storage
-                elif isinstance(arg_value, (int, float, bool)):
-                    # Always capture simple types
-                    variable_values[arg_name] = arg_value
-                elif isinstance(arg_value, (list, dict)):
-                    # For complex types, store a summary
-                    if isinstance(arg_value, list):
-                        variable_values[arg_name] = f"<list with {len(arg_value)} items>"
-                    else:
-                        variable_values[arg_name] = f"<dict with {len(arg_value)} keys>"
-                        
-        except Exception as e:
-            logger.error(f"Failed to extract variable values: {e}")
-            
-        return variable_values
     
     def _get_raw_string_args(self, frame):
         """Extract raw string arguments from frame for prompt detection."""
@@ -907,6 +847,9 @@ class TraceTracer:
                     json.dumps(event['metadata'])
                 ) for event in events
             ])
+            
+            # Prompt usage tracking removed since we can't reliably link functions to specific prompts
+            
             conn.commit()
             conn.close()
             
@@ -965,49 +908,17 @@ def analyze_prompts(database_path: str = "trace_events.db"):
                 'usage_count': usage_count
             })
         
-        # Get usage patterns from prompt_usages table
-        cursor = conn.execute('''
-            SELECT p.prompt_name, COUNT(pu.id) as usage_count,
-                   GROUP_CONCAT(DISTINCT t.function_name) as used_in_functions
-            FROM prompts p
-            LEFT JOIN prompt_usages pu ON p.id = pu.prompt_id
-            LEFT JOIN trace_events t ON pu.trace_id = t.trace_id
-            GROUP BY p.prompt_name, p.id
-            ORDER BY usage_count DESC
-        ''')
-        
+        # Usage patterns now based on usage_count in prompts table (updated when prompts are detected)
         usage_patterns = []
-        for row in cursor.fetchall():
-            prompt_name, count, functions = row
+        for prompt in prompts:
             usage_patterns.append({
-                'prompt_name': prompt_name,
-                'usage_count': count or 0,
-                'used_in_functions': functions.split(',') if functions else []
+                'prompt_name': prompt['name'],
+                'usage_count': prompt['usage_count'],
+                'used_in_functions': []  # Can't determine without proper linking
             })
         
-        # Get detailed usage records
-        cursor = conn.execute('''
-            SELECT pu.id, p.prompt_name, t.function_name, pu.timestamp, 
-                   pu.variable_values, pu.rendered_content
-            FROM prompt_usages pu
-            JOIN prompts p ON pu.prompt_id = p.id
-            JOIN trace_events t ON pu.trace_id = t.trace_id
-            ORDER BY pu.timestamp DESC
-            LIMIT 50
-        ''')
-        
+        # No detailed usage records since we can't reliably link functions to specific prompts
         recent_usages = []
-        for row in cursor.fetchall():
-            usage_id, prompt_name, function_name, timestamp, var_values_json, rendered = row
-            var_values = json.loads(var_values_json) if var_values_json else {}
-            recent_usages.append({
-                'usage_id': usage_id,
-                'prompt_name': prompt_name,
-                'function_name': function_name,
-                'timestamp': timestamp,
-                'variable_values': var_values,
-                'rendered_content': rendered
-            })
         
         conn.close()
         
