@@ -275,7 +275,19 @@ else:
                             ''', (str(uuid.uuid4()), prompt_id, 'queued', now, now))
                             
                             # Auto-generate evaluator when marked for evolution
-                            auto_generate_evaluator_on_evolution(db_path, prompt_id, 'prompt')
+                            # Find project root by searching for .agent_evolve directory
+                            import os
+                            from pathlib import Path
+                            current = Path.cwd()
+                            project_root = None
+                            while current != current.parent:
+                                if (current / ".agent_evolve").exists():
+                                    project_root = str(current)
+                                    break
+                                current = current.parent
+                            if not project_root:
+                                project_root = str(Path.cwd())
+                            auto_generate_evaluator_on_evolution(db_path, prompt_id, 'prompt', project_root)
                     
                 cursor.execute('''
                     UPDATE prompts 

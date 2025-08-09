@@ -64,7 +64,6 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 {import_statement}
 
 def load_training_data(db_path, prompt_id):
-    """Load training data from database"""
     conn = sqlite3.connect(db_path)
     cursor = conn.execute('''
         SELECT inputs, outputs, data_source
@@ -86,7 +85,6 @@ def load_training_data(db_path, prompt_id):
     return training_samples
 
 def evaluate():
-    """Main evaluation function"""
     # Get parameters from command line or environment
     db_path = sys.argv[1] if len(sys.argv) > 1 else 'data/graph.db'
     prompt_id = sys.argv[2] if len(sys.argv) > 2 else None
@@ -129,6 +127,8 @@ def get_use_case_from_prompt(prompt_content, prompt_type):
     """Determine the use case based on prompt content and type"""
     content_lower = prompt_content.lower()
     
+    if any(word in content_lower for word in ['classify', 'categorize', 'intent', 'label']):
+        return "classification"
     if any(word in content_lower for word in ['write', 'generate', 'create', 'compose']):
         return "content_generation"
     elif any(word in content_lower for word in ['research', 'analyze', 'investigate', 'study']):
@@ -311,6 +311,7 @@ def auto_generate_evaluator_on_evolution(db_path, item_id, item_type, project_ro
         # Generate evaluator.py
         return create_standard_evaluator(
             evaluator_dir=evaluator_dir,
+            item_id=item_id,
             item_name=item_name,
             item_type=item_type_detail,
             definition_location=definition_location,
@@ -322,7 +323,7 @@ def auto_generate_evaluator_on_evolution(db_path, item_id, item_type, project_ro
         logger.error(f"Error auto-generating evaluator: {e}")
         return False
 
-def create_standard_evaluator(evaluator_dir, item_name, item_type, definition_location, content, variables):
+def create_standard_evaluator(evaluator_dir, item_id, item_name, item_type, definition_location, content, variables):
     """Create a standard evaluator.py template with proper imports and functions"""
     try:
         # Determine import statement
@@ -332,7 +333,7 @@ def create_standard_evaluator(evaluator_dir, item_name, item_type, definition_lo
         template_name = select_evaluator_template_with_llm(content, item_type, item_name)
         
         # Load the selected template
-        evaluator_template = load_evaluator_template(template_name, item_name, item_type, import_statement)
+        evaluator_template = load_evaluator_template(template_name, item_id, item_name, item_type, import_statement)
         
         # Write the evaluator file
         evaluator_path = os.path.join(evaluator_dir, "evaluator.py")
@@ -360,15 +361,11 @@ def select_evaluator_template_with_llm(content, item_type, item_name):
 Available templates:
 1. **default_evaluator** - General-purpose template for most functions/prompts
 2. **content_generation_evaluator** - Specialized for content creation, writing, marketing copy, articles, blogs, etc.
-
-Consider:
-- What is the primary purpose of this item?
-- Does it generate text content, articles, marketing copy, or creative writing?
-- Would it benefit from LLM-based evaluation with readability, engagement, authenticity metrics?
+3. **classification_evaluator** - For classification tasks, comparing output to a single expected value.
 
 Respond with ONLY a JSON object:
 {{
-  "template": "default_evaluator" or "content_generation_evaluator",
+  "template": "default_evaluator" or "content_generation_evaluator" or "classification_evaluator",
   "reasoning": "Brief explanation of why this template is most suitable"
 }}"""
         logger.info(f"Sending LLM selection prompt for '{item_name}':\n{selection_prompt}")
@@ -380,7 +377,7 @@ Respond with ONLY a JSON object:
             reasoning = result.get("reasoning", "No reasoning provided")
             
             # Validate template exists
-            if selected_template in ["default_evaluator", "content_generation_evaluator"]:
+            if selected_template in ["default_evaluator", "content_generation_evaluator", "classification_evaluator"]:
                 logger.info(f"LLM selected {selected_template} for {item_name}: {reasoning}")
                 return selected_template
             else:
@@ -394,7 +391,9 @@ Respond with ONLY a JSON object:
         logger.warning(f"Error using LLM for template selection: {e}, falling back to default")
         return "default_evaluator"
 
-def load_evaluator_template(template_name, item_name, item_type, import_statement):
+from string import Template
+
+def load_evaluator_template(template_name, item_id, item_name, item_type, import_statement):
     """Load and format the specified evaluator template"""
     try:
         # Get the template file path
@@ -409,8 +408,10 @@ def load_evaluator_template(template_name, item_name, item_type, import_statemen
         with open(template_path, 'r') as f:
             template_content = f.read()
         
-        # Format the template with the provided variables
-        formatted_template = template_content.format(
+        # Use string.Template for safe substitution
+        template = Template(template_content)
+        formatted_template = template.substitute(
+            item_id=item_id,
             item_name=item_name,
             item_type=item_type,
             import_statement=import_statement
