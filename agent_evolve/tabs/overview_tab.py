@@ -37,7 +37,7 @@ def render_overview_tab(tool_data, selected_tool):
                         if not os.getenv('OPENAI_API_KEY'):
                             st.error("❌ OPENAI_API_KEY required")
                         else:
-                            generator = EvaluatorGenerator(model_name="gpt-4o")
+                            generator = EvaluatorGenerator(model_name="gpt-5")
                             tool_path = Path(tool_data['path'])
                             
                             # Force regeneration by removing existing evaluator

@@ -50,6 +50,7 @@ setup(
     entry_points={
         "console_scripts": [
             "agent-evolve=agent_evolve.__main__:main",
+            "agent-evolve-daemon=agent_evolve.evolve_daemon:main",
         ],
     },
 )

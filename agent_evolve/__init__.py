@@ -8,10 +8,9 @@ A comprehensive toolkit for evolving and tracking AI agents, including:
 - Safe auto-tracing system for complete operation monitoring
 """
 
-from .evolve_decorator import evolve
+
 from .tracking.decorator import track_node
 from .auto_tracing import enable_auto_tracing
-from .safe_tracer import trace_call, safe_trace_decorator, trace_operation
 from .trace_tracer import enable_trace_tracing, analyze_prompts
 
 __version__ = "2.0.0"

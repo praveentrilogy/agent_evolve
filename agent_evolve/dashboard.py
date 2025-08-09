@@ -6,6 +6,11 @@ A Streamlit dashboard for visualizing agent evolution progress and trace data.
 
 import streamlit as st
 import os
+from dotenv import load_dotenv
+from agent_evolve.shared_sidebar import render_sidebar
+
+# Load environment variables from current working directory
+load_dotenv()
 
 st.set_page_config(
     page_title="Agent Evolve Dashboard",
@@ -14,17 +19,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Add Agent Evolve title at the top of sidebar
-st.sidebar.title("🧬 Agent Evolve")
-
-# Database info
-db_path = os.environ.get('AGENT_EVOLVE_DB_PATH', 'data/graph.db')
-if os.path.exists(db_path):
-    st.sidebar.success(f"✅ Database connected")
-    st.sidebar.caption(f"Path: {db_path}")
-else:
-    st.sidebar.error(f"❌ Database not found")
-    st.sidebar.caption(f"Expected: {db_path}")
+# Render shared sidebar and get database path
+db_path = render_sidebar()
 
 # Main page content
 st.title("🧬 Agent Evolve Dashboard")

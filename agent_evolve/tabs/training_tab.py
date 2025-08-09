@@ -100,7 +100,7 @@ For "Improve existing" or "Replace": Return the complete improved dataset as a J
 Return ONLY valid JSON, no explanations or markdown."""
                         
                         response = client.chat.completions.create(
-                            model="gpt-4o",
+                            model="gpt-5",
                             messages=[{"role": "user", "content": training_prompt}],
                             temperature=0.7  # Higher temperature for more diverse training data
                         )

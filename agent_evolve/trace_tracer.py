@@ -169,6 +169,88 @@ class TraceTracer:
         conn.execute('CREATE INDEX IF NOT EXISTS idx_prompt_usage_prompt ON prompt_usages(prompt_id)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_function_name ON functions(full_function_name)')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_function_file ON functions(filename)')
+
+        # Create prompt_evolve_queue table (renamed from evolve_queue)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS prompt_evolve_queue (
+                id TEXT PRIMARY KEY,
+                prompt_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (prompt_id) REFERENCES prompts(id)
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_prompt_evolve_queue_status ON prompt_evolve_queue(status)')
+        
+        # Create code_evolve_queue table for functions
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS code_evolve_queue (
+                id TEXT PRIMARY KEY,
+                function_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (function_id) REFERENCES functions(id)
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_code_evolve_queue_status ON code_evolve_queue(status)')
+        
+        # Migrate data from old evolve_queue table to prompt_evolve_queue if it exists
+        try:
+            conn.execute('INSERT INTO prompt_evolve_queue SELECT * FROM evolve_queue')
+            conn.execute('DROP TABLE evolve_queue')
+            conn.execute('DROP INDEX IF EXISTS idx_evolve_queue_status')
+        except:
+            # Table doesn't exist or already migrated, ignore
+            pass
+        
+        # Add marked_for_evolution column to functions table if it doesn't exist
+        try:
+            conn.execute('ALTER TABLE functions ADD COLUMN marked_for_evolution INTEGER DEFAULT 0')
+        except:
+            # Column already exists, ignore
+            pass
+        
+        # Create prompt_training_data table
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS prompt_training_data (
+                id TEXT PRIMARY KEY,
+                prompt_id TEXT NOT NULL,
+                inputs TEXT NOT NULL,
+                outputs TEXT NOT NULL,
+                data_source TEXT DEFAULT 'synthetic',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (prompt_id) REFERENCES prompts(id)
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_prompt_training_data_prompt_id ON prompt_training_data(prompt_id)')
+        
+        # Create code_training_data table
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS code_training_data (
+                id TEXT PRIMARY KEY,
+                function_id TEXT NOT NULL,
+                inputs TEXT NOT NULL,
+                outputs TEXT NOT NULL,
+                data_source TEXT DEFAULT 'synthetic',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (function_id) REFERENCES functions(id)
+            )
+        ''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_code_training_data_function_id ON code_training_data(function_id)')
+        
+        # Add data_source column to existing tables if they don't have it
+        try:
+            conn.execute('ALTER TABLE prompt_training_data ADD COLUMN data_source TEXT DEFAULT "synthetic"')
+        except:
+            pass
+        try:
+            conn.execute('ALTER TABLE code_training_data ADD COLUMN data_source TEXT DEFAULT "synthetic"')
+        except:
+            pass
         
         conn.commit()
         conn.close()

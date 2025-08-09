@@ -1,12 +1,12 @@
-"""
-Prompts page for Agent Evolve Dashboard
-"""
-
 import streamlit as st
 import sqlite3
 import json
 import pandas as pd
 import os
+import uuid
+from datetime import datetime
+from agent_evolve.training_data_generator import generate_training_data
+from agent_evolve.evaluator_engine import auto_generate_evaluator_on_evolution
 
 st.set_page_config(
     page_title="Prompts - Agent Evolve",
@@ -31,7 +31,7 @@ def get_prompt_usage(prompt_id: str) -> list:
     """Get usage records for a specific prompt"""
     import sqlite3
     
-    conn = sqlite3.connect('agent_rl/backend/data/graph.db')
+    conn = sqlite3.connect(db_path)
     cursor = conn.execute('''
         SELECT 
             pu.timestamp,
@@ -110,7 +110,36 @@ def load_prompts_from_db(db_path):
         st.error(f"Error loading prompts: {e}")
         return []
 
-
+def load_evolve_queue(db_path):
+    """Load the evolution queue from the database."""
+    try:
+        if not os.path.exists(db_path):
+            return []
+            
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute('''
+            SELECT q.id, p.prompt_name, q.status, q.created_at, q.updated_at
+            FROM prompt_evolve_queue q
+            JOIN prompts p ON q.prompt_id = p.id
+            ORDER BY q.created_at DESC
+        ''')
+        
+        queue = []
+        for row in cursor.fetchall():
+            queue.append({
+                'id': row[0],
+                'prompt_name': row[1],
+                'status': row[2],
+                'created_at': row[3],
+                'updated_at': row[4]
+            })
+        
+        conn.close()
+        return queue
+        
+    except Exception as e:
+        st.error(f"Error loading evolution queue: {e}")
+        return []
 
 # Main prompts page content
 st.header("📝 Prompts")
@@ -224,85 +253,47 @@ else:
         if current_state != original_state:
             try:
                 conn = sqlite3.connect(db_path)
-                conn.execute('''
+                cursor = conn.cursor()
+                now = datetime.utcnow().isoformat()
+                if current_state:
+                    # Check if already in queue or running
+                    cursor.execute("SELECT status FROM prompt_evolve_queue WHERE prompt_id = ?", (prompt_id,))
+                    existing_queue_item = cursor.fetchone()
+
+                    if existing_queue_item and existing_queue_item[0] in ['queued', 'running']:
+                        st.warning(f"Prompt '{prompts[i]['name']}' is already in the queue or running (Status: {existing_queue_item[0]}).")
+                    else:
+                        # Add to queue or update status to queued if completed/failed
+                        if existing_queue_item:
+                            cursor.execute('''
+                                UPDATE prompt_evolve_queue SET status = 'queued', updated_at = ? WHERE prompt_id = ?
+                            ''', (now, prompt_id))
+                        else:
+                            cursor.execute('''
+                                INSERT INTO prompt_evolve_queue (id, prompt_id, status, created_at, updated_at)
+                                VALUES (?, ?, ?, ?, ?)
+                            ''', (str(uuid.uuid4()), prompt_id, 'queued', now, now))
+                            
+                            # Auto-generate evaluator when marked for evolution
+                            auto_generate_evaluator_on_evolution(db_path, prompt_id, 'prompt')
+                    
+                cursor.execute('''
                     UPDATE prompts 
                     SET marked_for_evolution = ? 
                     WHERE id = ?
                 ''', [1 if current_state else 0, prompt_id])
                 conn.commit()
                 conn.close()
-                
+                    
                 # Show feedback
                 if current_state:
-                    st.success(f"✅ Marked '{prompts[i]['name']}' for evolution")
+                    st.success(f"✅ Queued '{prompts[i]['name']}' for evolution")
                 else:
                     st.info(f"ℹ️ Unmarked '{prompts[i]['name']}' for evolution")
-                    
+                        
                 st.rerun()
-                
+                    
             except Exception as e:
                 st.error(f"Error updating prompt: {e}")
-    
-    # Detailed view selector
-    st.divider()
-    st.subheader("Detailed View")
-    
-    selected_prompt = st.selectbox(
-        "Select a prompt to view details:",
-        options=[p['name'] for p in prompts],
-        index=0 if prompts else None
-    )
-    
-    if selected_prompt:
-        prompt = next(p for p in prompts if p['name'] == selected_prompt)
         
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.subheader("Content")
-            st.code(prompt['content'], language='text')
-            
-            if prompt['full_code'] and not prompt['full_code'].startswith('<'):
-                st.subheader("Source Code")
-                st.code(prompt['full_code'], language='python')
-        
-        with col2:
-            st.subheader("Details")
-            st.write(f"**Type:** {prompt['type']}")
-            st.write(f"**Location:** {prompt['definition_location']}")
-            st.write(f"**Usage Count:** {prompt['usage_count']}")
-            
-            if prompt['variables']:
-                st.write("**Template Variables:**")
-                for var, var_type in prompt['variables'].items():
-                    st.write(f"  - `{var}` ({var_type})")
-            
-            if prompt['function_signature']:
-                st.write(f"**Signature:** `{prompt['function_signature']}`")
-            
-            st.write(f"**First Seen:** {prompt['created_at'][:19]}")
-            st.write(f"**Last Seen:** {prompt['last_seen'][:19]}")
-            
-            # Add prompt usage details
-            st.subheader("Recent Usage")
-            usage_data = get_prompt_usage(prompt['id'])
-            if usage_data:
-                for usage in usage_data[:5]:  # Show last 5 usages
-                    with st.expander(f"Used in {usage['function_name']} at {usage['timestamp'][:19]}"):
-                        if usage['variable_values']:
-                            st.write("**Variable Values:**")
-                            import json
-                            try:
-                                var_values = json.loads(usage['variable_values'])
-                                for var_name, var_value in var_values.items():
-                                    st.code(f"{var_name} = {var_value}", language='python')
-                            except:
-                                st.text(usage['variable_values'])
-                        
-                        if usage['rendered_content']:
-                            st.write("**Rendered Content:**")
-                            st.text_area("", value=usage['rendered_content'], height=200, disabled=True, key=f"rendered_{usage['timestamp']}")
-                        else:
-                            st.write("No rendered content available.")
-            else:
-                st.write("No usage records found.")
+    st.markdown("💡 Use the checkboxes above to mark items for evolution, or use the sidebar to view detailed information.")

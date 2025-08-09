@@ -261,7 +261,7 @@ def evaluate(program) -> dict:
                 
                 # Get evaluation from LLM
                 response = client.chat.completions.create(
-                    model="gpt-4o",
+                    model="gpt-5",
                     messages=[{{"role": "user", "content": eval_prompt}}],
                     temperature=0.0
                 )
@@ -369,7 +369,7 @@ def evaluate(program) -> dict:
             
         # Send to LLM
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5",
             messages=[{{"role": "user", "content": formatted_prompt}}],
             temperature=0.0
         )
@@ -413,7 +413,7 @@ def evaluate(program) -> dict:
             
             # Get evaluation
             eval_response = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-5",
                 messages=[{{"role": "user", "content": eval_prompt}}],
                 temperature=0.0
             )
@@ -530,7 +530,7 @@ def get_content_evaluator_prompt(tool_name: str, function_description: str,
                 
                 # Get evaluation from LLM
                 response = client.chat.completions.create(
-                    model="gpt-4o",
+                    model="gpt-5",
                     messages=[{{"role": "user", "content": eval_prompt}}],
                     temperature=0.0
                 )

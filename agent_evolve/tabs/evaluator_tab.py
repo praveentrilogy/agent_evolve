@@ -124,7 +124,7 @@ Generate the complete improved evaluator code.
 Return ONLY Python code, no explanations or markdown."""
                         
                         response = client.chat.completions.create(
-                            model="gpt-4o",
+                            model="gpt-5",
                             messages=[{"role": "user", "content": improvement_prompt}],
                             temperature=0.3
                         )
