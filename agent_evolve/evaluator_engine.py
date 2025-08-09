@@ -9,6 +9,7 @@ import sys
 import tempfile
 import importlib.util
 import logging
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -23,82 +24,69 @@ You are an expert test engineer who specializes in creating evaluators for AI pr
 Generate a Python evaluator file that tests the given prompt/code against training data.
 
 Here's what you have:
-- **Prompt/Code Details**: {prompt_details}
-- **Use Case**: {use_case}
+- **Item Details**: {item_details} (This can be prompt or code details)
+- **Use Case**: {use_case} (e.g., 'code_function', 'content_generation')
 - **Training Data Sample**: {training_sample}
-- **Import Path**: {import_path}
+- **Import Statement for Target**: {import_statement} (This is how to import the function/prompt to be evaluated)
 
-Create a complete Python file that:
-1. Imports the actual prompt/function from its location
-2. Loads training data from the database
-3. Runs the prompt/function against training data
-4. Calculates appropriate metrics based on the use case
-5. Returns results in the format: {"metrics": dict, "details": dict, "recommendations": list}
+Create a complete Python file named `evaluator.py` that:
+1.  **Imports the actual prompt/function** from its location using the provided `{import_statement}`.
+2.  **Loads training data** from the database using `agent_evolve.agent_evolve.data_utils.load_training_data`.
+3.  **Defines an `evaluate()` function** that takes no arguments and returns a dictionary.
+4.  **Iterates through each training data point**. For each point:
+    *   **Executes the target function/prompt** with the `inputs` from the training data.
+    *   **Performs an evaluation of the output**. This evaluation should be subjective and dynamic.
+    *   **If the target function's output is non-deterministic** (e.g., content generation, code generation, creative tasks), use an **LLM call** (import `get_llm_response` from `agent_evolve.llm`) to subjectively assess the quality, correctness, relevance, or other appropriate metrics of the generated output against the expected output (if available) or the use case.
+    *   **Collects metrics** for that specific training data point. Choose metrics appropriate for the use case and the nature of the function's output.
+5.  **Aggregates results** and returns them in the format: `{"metrics": dict, "details": dict, "recommendations": list}`. The `metrics` dictionary should contain overall aggregated metrics, and `details` should include a list of individual evaluation results for each training data point.
 
 Choose metrics appropriate for the use case:
-- **Content Generation**: quality, relevance, engagement, authenticity
-- **Code Functions**: correctness, performance, maintainability
-- **Research/Analysis**: accuracy, completeness, depth
-- **Planning**: feasibility, clarity, completeness
+- **Content Generation**: quality, relevance, engagement, authenticity, creativity
+- **Code Functions**: correctness, performance, maintainability, security, efficiency
+- **Research/Analysis**: accuracy, completeness, depth, conciseness
+- **Planning**: feasibility, clarity, completeness, robustness
 
 The evaluator should work as a standalone test that can be executed.
 
-Return only the Python code for the evaluator file:
+Return only the Python code for the evaluator file. Ensure all necessary imports (like `agent_evolve.llm` for LLM calls) are included.
 
 ```python
-# Generated evaluator for {prompt_name}
+# Generated evaluator for {item_name}
 import sqlite3
 import json
 import sys
 import os
 from pathlib import Path
-
 import logging
+
+# Import data utility functions
+from agent_evolve.agent_evolve.data_utils import load_training_data
+# Import LLM for subjective evaluation if needed
+from agent_evolve.llm import get_llm_response
 
 logger = logging.getLogger(__name__)
 
 # Add the project root to Python path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-# Import the actual prompt/function
+# Import the actual prompt/function to be evaluated
 {import_statement}
-
-def load_training_data(db_path, prompt_id):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.execute('''
-        SELECT inputs, outputs, data_source
-        FROM prompt_training_data
-        WHERE prompt_id = ?
-        ORDER BY created_at DESC
-    ''', (prompt_id,))
-    
-    training_samples = []
-    for row in cursor.fetchall():
-        inputs, outputs, data_source = row
-        training_samples.append({
-            'inputs': json.loads(inputs) if inputs else {},
-            'outputs': json.loads(outputs) if outputs else {},
-            'data_source': data_source
-        })
-    
-    conn.close()
-    return training_samples
 
 def evaluate():
     # Get parameters from command line or environment
     db_path = sys.argv[1] if len(sys.argv) > 1 else 'data/graph.db'
-    prompt_id = sys.argv[2] if len(sys.argv) > 2 else None
+    item_id = sys.argv[2] if len(sys.argv) > 2 else None # This will be prompt_id or function_id
     
-    if not prompt_id:
-        return {"error": "No prompt_id provided"}
+    if not item_id:
+        return {"error": "No item_id provided"}
     
     # Load training data
-    training_data = load_training_data(db_path, prompt_id)
+    training_data = load_training_data(db_path, item_id)
     
     if not training_data:
         return {"error": "No training data available"}
     
-    # Initialize metrics
+    # Initialize metrics and details
     metrics = {}
     details = {
         "total_samples": len(training_data),
@@ -108,7 +96,15 @@ def evaluate():
     }
     recommendations = []
     
+    # --- LLM-generated evaluation logic starts here ---
+    # The LLM will fill this part based on the use case and item details.
+    # It should iterate through training_data, call the imported function/prompt,
+    # perform subjective evaluation (using get_llm_response for non-deterministic outputs),
+    # and collect metrics for each sample.
+    
     {evaluation_logic}
+    
+    # --- LLM-generated evaluation logic ends here ---
     
     return {
         "metrics": metrics,
@@ -291,14 +287,20 @@ def auto_generate_evaluator_on_evolution(db_path, item_id, item_type, project_ro
             
         elif item_type == 'code':
             cursor = conn.execute('''
-                SELECT full_name, source_code, definition_location
+                SELECT function_name, definition_location
                 FROM functions
                 WHERE id = ?
             ''', (item_id,))
             result = cursor.fetchone()
             if not result:
                 return False
-            item_name, content, definition_location = result
+            item_name, definition_location = result
+            
+            # Extract function content from the file path
+            content = extract_function_code(definition_location, item_name)
+            if content is None:
+                return False
+                
             variables_json = None
             item_type_detail = 'function'
             
@@ -309,22 +311,32 @@ def auto_generate_evaluator_on_evolution(db_path, item_id, item_type, project_ro
         os.makedirs(evaluator_dir, exist_ok=True)
         
         # Generate evaluator.py
-        return create_standard_evaluator(
-            evaluator_dir=evaluator_dir,
-            item_id=item_id,
-            item_name=item_name,
-            item_type=item_type_detail,
-            definition_location=definition_location,
-            content=content,
-            variables=json.loads(variables_json) if variables_json else {}
-        )
+        if item_type == 'prompt':
+            return create_prompt_evaluator(
+                evaluator_dir=evaluator_dir,
+                item_id=item_id,
+                item_name=item_name,
+                item_type=item_type_detail,
+                definition_location=definition_location,
+                content=content,
+                variables=json.loads(variables_json) if variables_json else {}
+            )
+        elif item_type == 'code':
+            return create_code_evaluator(
+                evaluator_dir=evaluator_dir,
+                item_id=item_id,
+                item_name=item_name,
+                item_type=item_type_detail,
+                definition_location=definition_location,
+                content=content
+            )
         
     except Exception as e:
         logger.error(f"Error auto-generating evaluator: {e}")
         return False
 
-def create_standard_evaluator(evaluator_dir, item_id, item_name, item_type, definition_location, content, variables):
-    """Create a standard evaluator.py template with proper imports and functions"""
+def create_prompt_evaluator(evaluator_dir, item_id, item_name, item_type, definition_location, content, variables):
+    """Create a prompt evaluator.py template with proper imports and functions"""
     try:
         # Determine import statement
         import_statement = get_import_statement_from_location(definition_location, item_name)
@@ -345,6 +357,34 @@ def create_standard_evaluator(evaluator_dir, item_id, item_name, item_type, defi
         
     except Exception as e:
         logger.error(f"Error creating standard evaluator: {e}")
+        return False
+
+def create_code_evaluator(evaluator_dir, item_id, item_name, item_type, definition_location, content):
+    """Create a code evaluator.py template with proper imports and functions"""
+    try:
+        # Determine import statement for the code function
+        import_statement = get_import_statement_from_location(definition_location, item_name)
+
+        # For code, the use_case is always 'code_function'
+        use_case = "code_function"
+
+        # Use LLM to determine the best evaluator template (or directly use a code-specific one)
+        # For now, we'll assume select_evaluator_template_with_llm can handle 'code_function'
+        template_name = select_evaluator_template_with_llm(content, item_type, item_name)
+
+        # Load the selected template
+        evaluator_template = load_evaluator_template(template_name, item_id, item_name, item_type, import_statement)
+
+        # Write the evaluator file
+        evaluator_path = os.path.join(evaluator_dir, "evaluator.py")
+        with open(evaluator_path, 'w') as f:
+            f.write(evaluator_template)
+
+        logger.info(f"Created {template_name} evaluator at {evaluator_path}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error creating code evaluator: {e}")
         return False
 
 def select_evaluator_template_with_llm(content, item_type, item_name):
@@ -533,6 +573,35 @@ except ImportError as e:
             return f"# TODO: Import {item_name} from {definition_location}"
     except Exception as e:
         return f"# TODO: Import {item_name} from {definition_location} (Error: {e})"
+
+import re
+
+def extract_function_code(file_path, function_name):
+    """
+    Extracts the source code of a specific function from a Python file.
+    This is a simplified implementation using regex and might not be robust for all cases.
+    """
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+
+        # Regex to find the function definition and its body
+        # It looks for 'def function_name(...):' and captures the indented block following it.
+        # This regex is very basic and assumes standard Python function definition and indentation.
+        pattern = r"^(def\s+" + re.escape(function_name) + r"\s*\(.*\):(?:\s*#.*|\s*|\n(?:\s{4}.*|\s*#.*|\s*)*)*)"
+        
+        match = re.search(pattern, content, re.MULTILINE)
+        
+        if match:
+            # Get the full matched function definition including its body
+            function_code = match.group(1)
+            return function_code
+        else:
+            logger.warning(f"Function '{function_name}' not found in file '{file_path}'.")
+            return None
+    except Exception as e:
+        logger.error(f"Error extracting function '{function_name}' from '{file_path}': {e}")
+        return None
 
 def run_evaluator(db_path, prompt_id, prompt_name, evaluator_path):
     """Run the evaluator as a test and return results"""

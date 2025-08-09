@@ -18,6 +18,170 @@ from agent_evolve.trace_tracer import enable_trace_tracing
 from agent_evolve.evolve_daemon import main as evolve_daemon_main
 from agent_evolve.evaluator_engine import generate_evaluator_cli
 import subprocess
+import sqlite3
+import json
+import uuid
+from datetime import datetime
+
+def sample_training_data_cli(db_path='data/graph.db', count=10):
+    """Sample training data from trace_events table and create training data entries."""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        print("🔍 Sampling training data from trace events...")
+        
+        # Get all prompts that have been used (have trace events)
+        cursor.execute("""
+            SELECT DISTINCT p.id, p.prompt_name, COUNT(te.id) as usage_count, 'prompt' as item_type
+            FROM prompts p
+            JOIN trace_events te ON te.used_prompt_id = p.id
+            WHERE te.event_type = 'function_call'
+            GROUP BY p.id, p.prompt_name
+            ORDER BY usage_count DESC
+        """)
+        
+        prompts_with_usage = cursor.fetchall()
+        
+        # Get all functions that have been used (have trace events)
+        cursor.execute("""
+            SELECT DISTINCT f.id, f.full_function_name, COUNT(te.id) as usage_count, 'code' as item_type
+            FROM functions f
+            JOIN trace_events te ON te.function_name = f.full_function_name
+            WHERE te.event_type = 'function_call'
+            GROUP BY f.id, f.full_function_name
+            ORDER BY usage_count DESC
+        """)
+        
+        functions_with_usage = cursor.fetchall()
+        
+        # Combine prompts and functions
+        all_items = prompts_with_usage + functions_with_usage
+        
+        if not all_items:
+            print("No prompts or functions with trace events found.")
+            conn.close()
+            return
+            
+        print(f"\n📊 Found {len(prompts_with_usage)} prompts and {len(functions_with_usage)} functions with trace events:")
+        if prompts_with_usage:
+            print("\n📝 Prompts:")
+            for item_id, item_name, usage_count, _ in prompts_with_usage:
+                print(f"  • {item_name}: {usage_count} trace events")
+        if functions_with_usage:
+            print("\n🔧 Functions:")
+            for item_id, item_name, usage_count, _ in functions_with_usage:
+                print(f"  • {item_name}: {usage_count} trace events")
+        
+        # Sample trace events for each item
+        total_samples_created = 0
+        samples_per_item = max(1, count // len(all_items))
+        
+        for item_id, item_name, _, item_type in all_items:
+            if item_type == 'prompt':
+                # Get random sample of trace events for this prompt
+                cursor.execute("""
+                    SELECT args, result 
+                    FROM trace_events 
+                    WHERE event_type = 'function_call' 
+                    AND used_prompt_id = ? 
+                    ORDER BY RANDOM() 
+                    LIMIT ?
+                """, (item_id, samples_per_item))
+            else:  # code/function
+                # Get random sample of trace events for this function
+                cursor.execute("""
+                    SELECT args, result 
+                    FROM trace_events 
+                    WHERE event_type = 'function_call' 
+                    AND function_name = ? 
+                    ORDER BY RANDOM() 
+                    LIMIT ?
+                """, (item_name, samples_per_item))
+            
+            events = cursor.fetchall()
+            samples_created = 0
+            
+            for (args_json, result_json) in events:
+                try:
+                    inputs = json.loads(args_json) if args_json else {}
+                    outputs = json.loads(result_json) if result_json else {}
+                    
+                    inputs_str = json.dumps(inputs, sort_keys=True)
+                    outputs_str = json.dumps(outputs, sort_keys=True)
+                    
+                    if item_type == 'prompt':
+                        # Check for existing entry in prompt_training_data
+                        cursor.execute("""
+                            SELECT COUNT(*) 
+                            FROM prompt_training_data 
+                            WHERE prompt_id = ? AND inputs = ?
+                        """, (item_id, inputs_str))
+                        
+                        if cursor.fetchone()[0] > 0:
+                            continue
+                        
+                        # Insert new prompt training data
+                        now = datetime.utcnow().isoformat()
+                        cursor.execute("""
+                            INSERT INTO prompt_training_data 
+                            (id, prompt_id, inputs, outputs, data_source, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            str(uuid.uuid4()),
+                            item_id,
+                            inputs_str,
+                            outputs_str,
+                            'real',
+                            now,
+                            now
+                        ))
+                    else:  # code/function
+                        # Check for existing entry in code_training_data
+                        cursor.execute("""
+                            SELECT COUNT(*) 
+                            FROM code_training_data 
+                            WHERE function_id = ? AND inputs = ?
+                        """, (item_id, inputs_str))
+                        
+                        if cursor.fetchone()[0] > 0:
+                            continue
+                        
+                        # Insert new code training data
+                        now = datetime.utcnow().isoformat()
+                        cursor.execute("""
+                            INSERT INTO code_training_data 
+                            (id, function_id, inputs, outputs, data_source, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            str(uuid.uuid4()),
+                            item_id,
+                            inputs_str,
+                            outputs_str,
+                            'real',
+                            now,
+                            now
+                        ))
+                    
+                    samples_created += 1
+                    total_samples_created += 1
+                    
+                except Exception as e:
+                    print(f"  ⚠️  Error processing event: {e}")
+                    continue
+            
+            if samples_created > 0:
+                print(f"\n✅ Created {samples_created} training samples for {item_name}")
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"\n🎉 Total: Created {total_samples_created} new training data samples")
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 def launch_dashboard(port=8501):
     """Launch the Streamlit dashboard."""
@@ -172,21 +336,21 @@ def main():
     )
     generate_evaluator_cli_parser.set_defaults(func=generate_evaluator_cli)
 
-    if len(sys.argv) == 1:
-        parser.print_help(sys.stderr)
-        sys.exit(1)
+    # Sample Training Data command
+    sample_training_data_parser = subparsers.add_parser(
+        "sample-training-data", help="Sample training data from trace_events table."
+    )
+    sample_training_data_parser.add_argument(
+        "--db-path", type=str, default="data/graph.db", help="Path to the database."
+    )
+    sample_training_data_parser.add_argument(
+        "--count", type=int, default=10, help="Number of samples to create."
+    )
+    sample_training_data_parser.set_defaults(func=sample_training_data_cli)
 
     args = parser.parse_args()
 
-    if args.command == "daemon":
-        if args.db_path:
-            os.environ['AGENT_EVOLVE_DB_PATH'] = args.db_path
-        if args.app_start_command:
-            os.environ['APP_START_COMMAND'] = args.app_start_command
-        if args.project_root:
-            os.environ['AGENT_EVOLVE_PROJECT_ROOT'] = args.project_root
-        evolve_daemon_main()
-    elif hasattr(args, "func"):
+    if hasattr(args, "func"):
         # Filter out args that are not part of the function's signature
         func_args = {k: v for k, v in vars(args).items() if k in args.func.__code__.co_varnames}
         args.func(**func_args)
