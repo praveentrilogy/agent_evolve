@@ -16,6 +16,7 @@ import os
 # from agent_evolve.safe_tracer import enable_safe_tracing, analyze_traces
 from agent_evolve.trace_tracer import enable_trace_tracing
 from agent_evolve.evolve_daemon import main as evolve_daemon_main
+from agent_evolve.evaluator_engine import generate_evaluator_cli
 import subprocess
 
 def launch_dashboard(port=8501):
