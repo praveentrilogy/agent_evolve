@@ -29,7 +29,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def sample_training_data_cli(db_path='data/graph.db', count=10):
+def sample_training_data_cli(db_path='.agent_evolve/data/graph.db', count=10):
     """Sample training data from trace_events table and create training data entries."""
     try:
         conn = sqlite3.connect(db_path)
@@ -262,7 +262,7 @@ def extract_decorated_tools_cli(path: str = '.', output_dir: str = '.agent_evolv
         import traceback
         traceback.print_exc()
 
-def generate_evaluator_openevolve_cli(target_name: str, db_path: str = 'data/graph.db', project_root: str = os.getcwd()):
+def generate_evaluator_openevolve_cli(target_name: str, db_path: str = '.agent_evolve/data/graph.db', project_root: str = os.getcwd()):
     """CLI function to generate an OpenEvolve-format evaluator for extracted tools."""
     logger.info(f"Generating OpenEvolve evaluator for '{target_name}'...")
     
@@ -290,7 +290,7 @@ def generate_evaluator_openevolve_cli(target_name: str, db_path: str = 'data/gra
         logger.error(f"❌ Failed to generate evaluator for '{target_name}'")
         print(f"❌ Failed to generate evaluator for '{target_name}'")
 
-def run_evolve_command(target_name: str, db_path: str = 'data/graph.db', project_root: str = os.getcwd(), checkpoint: int = 0, iterations: int = None):
+def run_evolve_command(target_name: str, db_path: str = '.agent_evolve/data/graph.db', project_root: str = os.getcwd(), checkpoint: int = 0, iterations: int = None):
     """Run OpenEvolve on a specific target (prompt or function)"""
     from agent_evolve.run_openevolve import run_openevolve_for_tool
     
@@ -389,7 +389,7 @@ def main():
         "target_name", type=str, help="Name of the prompt or function to evolve (e.g., ORCHESTRATOR_PROMPT)"
     )
     evolve_parser.add_argument(
-        "--db-path", type=str, default="data/graph.db", help="Path to the SQLite database file"
+        "--db-path", type=str, default=".agent_evolve/data/graph.db", help="Path to the SQLite database file"
     )
     evolve_parser.add_argument(
         "--project-root", type=str, default=os.getcwd(), help="Root directory of the project"
@@ -439,7 +439,7 @@ def main():
         "trace", help="Enable trace-based auto-tracing using sys.settrace()"
     )
     trace_parser.add_argument(
-        "--db-path", type=str, default="data/graph.db", help="Path to the SQLite database file"
+        "--db-path", type=str, default=".agent_evolve/data/graph.db", help="Path to the SQLite database file"
     )
     trace_parser.add_argument(
         "--project-root", type=str, default=os.getcwd(), help="Root directory of project to trace"
@@ -454,7 +454,7 @@ def main():
         "daemon", help="Run the Agent Evolve daemon to process the evolution queue"
     )
     daemon_parser.add_argument(
-        "--db-path", type=str, default="data/graph.db", help="Path to the SQLite database file"
+        "--db-path", type=str, default=".agent_evolve/data/graph.db", help="Path to the SQLite database file"
     )
     daemon_parser.add_argument(
         "--app-start-command", type=str, help="Command to start the application server (e.g., 'python app.py')"
@@ -472,7 +472,7 @@ def main():
         "target_name", type=str, help="Name of the prompt or function to generate evaluator for (e.g., ORCHESTRATOR_PROMPT)"
     )
     generate_evaluator_cli_parser.add_argument(
-        "--db-path", type=str, default="data/graph.db", help="Path to the SQLite database file"
+        "--db-path", type=str, default=".agent_evolve/data/graph.db", help="Path to the SQLite database file"
     )
     generate_evaluator_cli_parser.add_argument(
         "--project-root", type=str, default=os.getcwd(), help="Root directory of the project containing the target"
@@ -484,7 +484,7 @@ def main():
         "sample-training-data", help="Sample training data from trace_events table."
     )
     sample_training_data_parser.add_argument(
-        "--db-path", type=str, default="data/graph.db", help="Path to the database."
+        "--db-path", type=str, default=".agent_evolve/data/graph.db", help="Path to the database."
     )
     sample_training_data_parser.add_argument(
         "--count", type=int, default=10, help="Number of samples to create."

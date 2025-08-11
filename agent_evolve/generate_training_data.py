@@ -17,26 +17,17 @@ import json
 import argparse
 from pathlib import Path
 from typing import Dict, List, Any
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
+from openai import OpenAI
 
 
 class TrainingDataGenerator:
     """Generates training data for agent tools using LLM"""
     
     def __init__(self, model_name: str = "gpt-4o", num_samples: int = 10, temperature: float = 1):
-        # Don't pass temperature for GPT-5 as it doesn't support custom values
-        model_args = {
-            "model": model_name,
-            # "max_tokens": 4000,
-            "timeout": 300
-        }
+        self.model_name = model_name
+        self.temperature = temperature
         
-        # Only add temperature for models that support it (not GPT-5)
-        if model_name != "gpt-5":
-            model_args["temperature"] = temperature
-            
-        self.model = ChatOpenAI(**model_args)
+        self.model = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.num_samples = num_samples
         self.tools_dir = Path("evolution/tools")
     
@@ -308,15 +299,19 @@ Return ONLY a valid JSON array. No explanations, no markdown, just the JSON arra
             print(f"  🤖 Sending request to LLM...")
             print(f"  📏 Prompt length: {len(prompt)} characters")
             
-            response = self.model.invoke([HumanMessage(content=prompt)])
+            response = self.model.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.temperature
+            )
             print(f"  📤 LLM response: {response}")
             
-            if not response or not response.content:
+            if not response or not response.choices or not response.choices[0].message.content:
                 print(f"  ❌ Error: LLM returned empty response")
                 return False
             
             # Parse the response
-            response_text = response.content.strip()
+            response_text = response.choices[0].message.content.strip()
             print(f"  📤 LLM response length: {len(response_text)} characters")
             print(f"  📝 LLM response preview: {response_text[:200]}...")
             
@@ -364,7 +359,10 @@ Return ONLY a valid JSON array. No explanations, no markdown, just the JSON arra
             
         except json.JSONDecodeError as e:
             print(f"  ❌ Error parsing JSON response: {e}")
-            print(f"  📄 Full response: {response.content if 'response' in locals() else 'No response received'}")
+            if 'response' in locals() and response and response.choices:
+                print(f"  📄 Full response: {response.choices[0].message.content}")
+            else:
+                print(f"  📄 Full response: No response received")
             return False
         except Exception as e:
             print(f"  ❌ Error generating training data: {e}")

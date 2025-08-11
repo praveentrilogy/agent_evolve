@@ -349,8 +349,8 @@ def main():
     tool_data = evolved_tools[selected_tool]
     
     # Create tabs for different views
-    overview_tab, training_tab, evolution_tab, evaluator_tab, evolved_code_tab, metrics_tab, config_tab = st.tabs([
-        "📈 Overview", "📋 Training Data", "🧬 Evolution", "🔧 Evaluator", "🔍 Evolved Code", "📊 Metrics", "⚙️ Config"
+    overview_tab, training_tab, evaluator_tab, evolution_tab, evolved_code_tab, metrics_tab, config_tab = st.tabs([
+        "📈 Overview", "📋 Training Data", "🔧 Evaluator", "🧬 Evolution", "🔍 Evolved Code", "📈 Metrics", "⚙️ Config"
     ])
     
     # Render each tab using the modular functions
@@ -360,11 +360,11 @@ def main():
     with training_tab:
         render_training_tab(tool_data, selected_tool)
     
-    with evolution_tab:
-        render_evolution_tab(tool_data, selected_tool)
-    
     with evaluator_tab:
         render_evaluator_tab(tool_data, selected_tool)
+    
+    with evolution_tab:
+        render_evolution_tab(tool_data, selected_tool)
     
     with evolved_code_tab:
         render_evolved_code_tab(tool_data, selected_tool)

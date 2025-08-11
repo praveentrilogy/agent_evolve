@@ -21,6 +21,7 @@ def display_metrics_chart(score_data: Dict) -> None:
     
     # Create radar chart
     metrics = list(original_scores.keys())
+    formatted_metrics = [m.replace('_', ' ').title() for m in metrics]
     original_values = [original_scores[m] for m in metrics]
     best_values = [best_scores[m] for m in metrics]
     
@@ -28,7 +29,7 @@ def display_metrics_chart(score_data: Dict) -> None:
     
     fig.add_trace(go.Scatterpolar(
         r=original_values,
-        theta=metrics,
+        theta=formatted_metrics,
         fill='toself',
         name='Original Version',
         line_color='red',
@@ -37,7 +38,7 @@ def display_metrics_chart(score_data: Dict) -> None:
     
     fig.add_trace(go.Scatterpolar(
         r=best_values,
-        theta=metrics,
+        theta=formatted_metrics,
         fill='toself',
         name='Best Evolved Version',
         line_color='green',
@@ -57,7 +58,7 @@ def display_metrics_chart(score_data: Dict) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
-def display_evolution_timeline(checkpoints: List[Dict]) -> None:
+def display_evolution_timeline(checkpoints: List[Dict], initial_scores: Dict = None) -> None:
     """Display evolution progress over checkpoints."""
     if not checkpoints:
         st.warning("No checkpoint data available")
@@ -65,16 +66,29 @@ def display_evolution_timeline(checkpoints: List[Dict]) -> None:
     
     # Extract metrics data for timeline
     timeline_data = []
+    
+    # Add initial scores as checkpoint 0 if available
+    if initial_scores:
+        for metric_name, value in initial_scores.items():
+            if metric_name != 'combined_score':  # Skip combined_score
+                timeline_data.append({
+                    'Checkpoint': 0,
+                    'Metric': metric_name.replace('_', ' ').title(),
+                    'Score': value
+                })
+    
+    # Add evolution checkpoint data
     for cp in checkpoints:
         checkpoint_num = cp['checkpoint']
         metrics = cp['info'].get('metrics', {})
         
         for metric_name, value in metrics.items():
-            timeline_data.append({
-                'Checkpoint': checkpoint_num,
-                'Metric': metric_name,
-                'Score': value
-            })
+            if metric_name != 'combined_score':  # Skip combined_score
+                timeline_data.append({
+                    'Checkpoint': checkpoint_num,
+                    'Metric': metric_name.replace('_', ' ').title(),
+                    'Score': value
+                })
     
     if not timeline_data:
         st.warning("No metrics data in checkpoints")
@@ -86,10 +100,21 @@ def display_evolution_timeline(checkpoints: List[Dict]) -> None:
                   title='Evolution Progress Over Checkpoints',
                   markers=True)
     
+    # Calculate appropriate y-axis range with padding
+    all_scores = df['Score'].tolist()
+    min_score = min(all_scores)
+    max_score = max(all_scores)
+    
+    # Add 10% padding to top and bottom
+    score_range = max_score - min_score
+    padding = max(0.05, score_range * 0.1)  # At least 0.05 padding
+    y_min = max(0, min_score - padding)
+    y_max = min(1.2, max_score + padding)  # Allow going slightly above 1.0
+    
     fig.update_layout(
         xaxis_title="Checkpoint",
         yaxis_title="Score",
-        yaxis=dict(range=[0, 1.0])
+        yaxis=dict(range=[y_min, y_max])
     )
     
     st.plotly_chart(fig, use_container_width=True)
@@ -114,11 +139,13 @@ def render_metrics_tab(tool_data, selected_tool):
             col1, col2, col3 = st.columns(3)
             metrics = [k for k in initial_scores.keys() if k != 'combined_score']
             
-            for i, (metric, score) in enumerate(initial_scores.items()):
+            col_index = 0
+            for metric, score in initial_scores.items():
                 if metric == 'combined_score':
                     continue
-                with [col1, col2, col3][i % 3]:
-                    st.metric(metric.title(), f"{score:.3f}")
+                with [col1, col2, col3][col_index % 3]:
+                    st.metric(metric.replace('_', ' ').title(), f"{score:.3f}")
+                col_index += 1
                     
         except Exception as e:
             st.error(f"❌ Error loading initial scores: {e}")
@@ -131,7 +158,7 @@ def render_metrics_tab(tool_data, selected_tool):
         checkpoint_data = tool_data['checkpoints']
         
         # Display evolution timeline chart
-        display_evolution_timeline(checkpoint_data)
+        display_evolution_timeline(checkpoint_data, initial_scores)
         
         # Show latest checkpoint info
         if checkpoint_data:
@@ -141,12 +168,14 @@ def render_metrics_tab(tool_data, selected_tool):
             latest_info = latest.get('info', {})
             if 'metrics' in latest_info:
                 col1, col2, col3 = st.columns(3)
-                for i, (metric, score) in enumerate(latest_info['metrics'].items()):
+                col_index = 0
+                for metric, score in latest_info['metrics'].items():
                     if metric == 'combined_score':
                         continue
-                    with [col1, col2, col3][i % 3]:
+                    with [col1, col2, col3][col_index % 3]:
                         improvement = score - initial_scores.get(metric, 0) if initial_scores else 0
-                        st.metric(metric.title(), f"{score:.3f}", delta=f"{improvement:+.3f}")
+                        st.metric(metric.replace('_', ' ').title(), f"{score:.3f}", delta=f"{improvement:+.3f}")
+                    col_index += 1
     else:
         st.info("🔄 No evolution checkpoints found. Start evolution to see progress timeline.")
     
