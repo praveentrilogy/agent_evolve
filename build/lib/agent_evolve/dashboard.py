@@ -28,19 +28,31 @@ def extract_tools(base_dir: str) -> bool:
     """Extract evolution targets from the current directory"""
     try:
         with st.spinner("🔄 Scanning your code for evolution targets..."):
+            # Get the actual working directory (where the user launched the dashboard from)
+            import os
+            working_dir = os.getcwd()
+            
+            # Show debug info
+            st.info(f"🔍 Scanning directory: {working_dir}")
+            st.info(f"📁 Output directory: {os.path.abspath(base_dir)}")
+            
             # Use the CLI command to extract tools
             result = subprocess.run([
                 sys.executable, "-m", "agent_evolve", "extract", 
-                "--path", ".",
-                "--output-dir", base_dir
-            ], capture_output=True, text=True, cwd=".")
+                "--path", working_dir,
+                "--output-dir", os.path.abspath(base_dir)
+            ], capture_output=True, text=True, cwd=working_dir)
             
             if result.returncode == 0:
                 st.success("✅ Successfully extracted evolution targets!")
+                if result.stdout:
+                    st.info(result.stdout)
                 st.info("🔄 Refreshing dashboard to show your new tools...")
                 return True
             else:
                 st.error(f"❌ Error extracting tools: {result.stderr}")
+                if result.stdout:
+                    st.warning(f"Output: {result.stdout}")
                 return False
     except Exception as e:
         st.error(f"❌ Error running extraction: {str(e)}")
@@ -158,12 +170,18 @@ def load_tool_data(base_dir: str = ".agent_evolve") -> Dict:
     tools_data = {}
     
     if not base_path.exists():
+        print(f"DEBUG: Base path {base_path} does not exist")
         return tools_data
+    
+    print(f"DEBUG: Loading tools from {base_path.absolute()}")
     
     # Skip non-tool directories
     skip_dirs = {'db', 'data', '__pycache__', '.git', 'logs', 'output', 'checkpoints', 'temp', 'tmp'}
     
-    for tool_dir in base_path.iterdir():
+    all_dirs = list(base_path.iterdir())
+    print(f"DEBUG: Found {len(all_dirs)} items in {base_path}")
+    
+    for tool_dir in all_dirs:
         if not tool_dir.is_dir() or tool_dir.name in skip_dirs:
             continue
         

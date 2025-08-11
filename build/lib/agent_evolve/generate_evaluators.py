@@ -216,11 +216,18 @@ class EvaluatorGenerator:
         validation_prompt = VALIDATION_PROMPT.format(code=code)
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "system", "content": validation_prompt}],
-                temperature=0.0
-            )
+            # GPT-5 doesn't support custom temperature parameters
+            if self.model_name == "gpt-5":
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "system", "content": validation_prompt}]
+                )
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "system", "content": validation_prompt}],
+                    temperature=0.0
+                )
 
 
             print(f"LLM Validation Response: {response.choices[0].message.content}")
@@ -306,11 +313,18 @@ class EvaluatorGenerator:
             training_sample=training_sample
         )
 
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[{"role": "system", "content": analysis_prompt}],
-            temperature=0.0
-        )
+        # GPT-5 doesn't support custom temperature parameters
+        if self.model_name == "gpt-5":
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "system", "content": analysis_prompt}]
+            )
+        else:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "system", "content": analysis_prompt}],
+                temperature=0.0
+            )
         print(response.choices[0].message.content)
         
         try:
@@ -378,11 +392,18 @@ CRITICAL: Address all the issues mentioned above in your new implementation.
                 tool_name, function_description, metrics, source_code, training_data, feedback_section
             )
 
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[{"role": "system", "content": evaluation_prompt}],
-            temperature=0.0
-        )
+        # GPT-5 doesn't support custom temperature parameters
+        if self.model_name == "gpt-5":
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "system", "content": evaluation_prompt}]
+            )
+        else:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[{"role": "system", "content": evaluation_prompt}],
+                temperature=0.0
+            )
         print(f"LLM Response: {response.choices[0].message.content}")
 
         

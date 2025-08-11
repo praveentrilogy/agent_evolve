@@ -502,19 +502,50 @@ class DecoratedToolExtractor:
             json.dump(metadata, f, indent=2)
         
         print(f"  💾 Saved to {tool_dir}")
-        self.extracted_tools.append(tool_name)
+        self.extracted_tools.append({'name': tool_name, 'path': str(tool_dir)})
     
     def _generate_function_tool_code(self, tool_info: Dict) -> str:
-        """Generate standalone code for a function"""
-        # Extract imports and dependencies from original file
-        imports = self._extract_imports(tool_info['source_file'], tool_info['function_name'])
-        dependencies = self._extract_dependencies(tool_info['source_file'], tool_info['function_name'])
+        """Generate standalone code by copying entire file and adding OpenEvolve tags"""
+        # Read the entire source file
+        with open(tool_info['source_file'], 'r') as f:
+            original_source = f.read()
+        
+        # Parse the source to find the target function and add OpenEvolve tags
+        tree = ast.parse(original_source)
+        source_lines = original_source.splitlines()
+        
+        # Find the target function
+        target_function = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == tool_info['function_name']:
+                target_function = node
+                break
+        
+        if target_function:
+            # Add OpenEvolve begin tag before the function
+            func_start_line = target_function.lineno - 1  # Convert to 0-based indexing
+            begin_tag = "# EVOLVE-BLOCK-START"
+            end_tag = "# EVOLVE-BLOCK-END"
+            
+            # Find the end of the function by looking at its end_lineno
+            func_end_line = target_function.end_lineno - 1  # Convert to 0-based indexing
+            
+            # Insert tags
+            source_lines.insert(func_start_line, begin_tag)
+            source_lines.insert(func_end_line + 2, end_tag)  # +2 because we added a line above and end_lineno is after the function
+            
+            modified_source = '\n'.join(source_lines)
+        else:
+            modified_source = original_source
+        
+        # Fix imports in the entire file
+        fixed_source = self._fix_imports_in_source(modified_source)
         
         code = f'''"""
 Tool: {tool_info['name']}
 Extracted from: {Path(tool_info['source_file']).name}
 
-{tool_info['description']}
+Complete source file with OpenEvolve tags around target function: {tool_info['function_name']}
 """
 
 import sys
@@ -525,30 +556,23 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Dynamically find and add directories containing 'src' to path
-current_dir = os.path.abspath(os.path.dirname(__file__))
-search_root = project_root
-for root, dirs, files in os.walk(search_root):
-    if 'src' in dirs:
-        src_parent = os.path.abspath(root)
-        if src_parent not in sys.path:
-            sys.path.insert(0, src_parent)
-        break
+# Add immediate subdirectories of the project root to the Python path
+# This is a heuristic to find source roots in different project layouts
+for item in os.listdir(project_root):
+    item_path = os.path.join(project_root, item)
+    if os.path.isdir(item_path):
+        # Exclude common non-source directories
+        if not item.startswith('.') and item not in ['venv', 'env', 'node_modules', '__pycache__', 'tests']:
+            if item_path not in sys.path:
+                sys.path.insert(0, item_path)
 
-{imports}
-
-{dependencies}
-
-
-{tool_info['source_code']}
-
-
-if __name__ == "__main__":
-    # Test the tool here
-    # result = {tool_info['function_name']}(...)
-    pass
+{fixed_source}
 '''
         return code
+    
+    def _fix_imports_in_source(self, source: str) -> str:
+        """Simply return the source unchanged - copy the entire file as-is"""
+        return source
     
     def _generate_constant_tool_code(self, tool_info: Dict) -> str:
         """Generate standalone code for a constant/prompt template"""
@@ -597,15 +621,15 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# Dynamically find and add directories containing 'src' to path
-current_dir = os.path.abspath(os.path.dirname(__file__))
-search_root = project_root
-for root, dirs, files in os.walk(search_root):
-    if 'src' in dirs:
-        src_parent = os.path.abspath(root)
-        if src_parent not in sys.path:
-            sys.path.insert(0, src_parent)
-        break
+# Add immediate subdirectories of the project root to the Python path
+# This is a heuristic to find source roots in different project layouts
+for item in os.listdir(project_root):
+    item_path = os.path.join(project_root, item)
+    if os.path.isdir(item_path):
+        # Exclude common non-source directories
+        if not item.startswith('.') and item not in ['venv', 'env', 'node_modules', '__pycache__', 'tests']:
+            if item_path not in sys.path:
+                sys.path.insert(0, item_path)
 
 {imports}
 
@@ -642,7 +666,7 @@ if __name__ == "__main__":
                 # Skip old evolution decorator imports in standalone tools
                 if node.module and ('evolve_decorator' in node.module or 
                                   node.module == 'evolution.decorators' or
-                                  'evolution.decorators' in str(node.module)):
+                                  'evolution.decorations' in str(node.module)):
                     continue
                 
                 # Skip relative imports like "from .imports import evolve"
@@ -650,7 +674,32 @@ if __name__ == "__main__":
                     continue
                     
                 import_stmt = ast.unparse(node)
-                all_imports.append(import_stmt)
+                
+                # Convert src imports to work with dynamic path resolution
+                if node.module and node.module.startswith('src.'):
+                    # Keep the original import but add a comment about path resolution
+                    all_imports.append(f"# Original: {import_stmt}")
+                    # Also add a try-except version for more robust importing
+                    names = [alias.name for alias in node.names]
+                    names_str = ', '.join(names)
+                    fallback_import = f"""try:
+    {import_stmt}
+except ImportError:
+    # Try importing from project structure
+    import sys
+    from pathlib import Path
+    current_file = Path(__file__).resolve()
+    project_dirs = [p for p in current_file.parents if (p / 'src').exists()]
+    if project_dirs:
+        src_path = project_dirs[0] / 'src'
+        if str(src_path) not in sys.path:
+            sys.path.insert(0, str(src_path))
+        from {node.module[4:]} import {names_str}  # Remove 'src.' prefix
+    else:
+        raise ImportError(f"Could not resolve import: {import_stmt}")"""
+                    all_imports.append(fallback_import)
+                else:
+                    all_imports.append(import_stmt)
         
         # For now, include ALL imports to avoid missing dependencies
         # This is more robust than trying to guess which ones are needed
@@ -925,13 +974,23 @@ if __name__ == "__main__":
         
         pattern = '**/*.py' if recursive else '*.py'
         
+        # Directories to exclude from scanning
+        exclude_dirs = {'.agent_evolve', '__pycache__', '.git', 'node_modules', '.venv', 'venv', 'env'}
+        
         for py_file in directory.glob(pattern):
+            # Skip files in excluded directories
+            if any(excluded in py_file.parts for excluded in exclude_dirs):
+                continue
+                
             if py_file.name.startswith('_') or py_file.name == 'setup.py':
                 continue
             
-            tools = self.extract_from_file(py_file)
-            for tool in tools:
-                self.save_extracted_tool(tool)
+            try:
+                tools = self.extract_from_file(py_file)
+                for tool in tools:
+                    self.save_extracted_tool(tool)
+            except Exception as e:
+                print(f"  ⚠️  Skipping {py_file}: {e}")
         
         print(f"\n✨ Extraction complete! Found {len(self.extracted_tools)} decorated tools.")
         return self.extracted_tools

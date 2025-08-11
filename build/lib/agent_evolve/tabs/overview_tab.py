@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 from pathlib import Path
+from components.training_data_form import render_training_data_form
 
 def render_overview_tab(tool_data, selected_tool):
     """Render the Overview tab content"""
@@ -10,18 +11,24 @@ def render_overview_tab(tool_data, selected_tool):
     st.markdown("### 1️⃣ Training Data")
     if tool_data.get('training_data'):
         st.success(f"✅ Training data available ({len(tool_data['training_data'])} samples)")
+        # Show regenerate form
+        render_training_data_form(
+            tool_data=tool_data,
+            selected_tool=selected_tool,
+            form_key_prefix="overview_regen",
+            expanded=False,
+            show_regenerate=True
+        )
     else:
         st.warning("❌ No training data")
-        if st.button("🚀 Generate Training Data", key=f"gen_training_{selected_tool}"):
-            with st.spinner("🤖 Generating training data..."):
-                try:
-                    from agent_evolve.generate_training_data import TrainingDataGenerator
-                    generator = TrainingDataGenerator(num_samples=10)
-                    generator.generate_training_data(str(Path(tool_data['path']).parent), force=False, specific_tool=selected_tool)
-                    st.success("✅ Training data generated!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error: {e}")
+        # Show initial generation form
+        render_training_data_form(
+            tool_data=tool_data,
+            selected_tool=selected_tool,
+            form_key_prefix="overview_gen",
+            expanded=True,
+            show_regenerate=False
+        )
     
     # Step 2: Evaluator
     st.markdown("### 2️⃣ Evaluator")
@@ -33,36 +40,38 @@ def render_overview_tab(tool_data, selected_tool):
             if st.button("🚀 Generate Evaluator", key=f"gen_eval_{selected_tool}"):
                 with st.spinner("🤖 Generating evaluator..."):
                     try:
-                        from agent_evolve.generate_evaluators import EvaluatorGenerator
+                        from agent_evolve.evaluator_engine import auto_generate_evaluator_for_extracted_tool
                         if not os.getenv('OPENAI_API_KEY'):
                             st.error("❌ OPENAI_API_KEY required")
                         else:
-                            generator = EvaluatorGenerator(model_name="gpt-4o")
+                            # Use the new file-based approach with OpenEvolve format
                             tool_path = Path(tool_data['path'])
+                            project_root = str(tool_path.parent.parent)
                             
-                            # Force regeneration by removing existing evaluator
-                            evaluator_file = tool_path / "evaluator.py"
-                            if evaluator_file.exists():
-                                evaluator_file.unlink()
-                                st.info("🔄 Removing existing evaluator to regenerate...")
+                            success = auto_generate_evaluator_for_extracted_tool(
+                                tool_dir_path=str(tool_path),
+                                project_root=project_root
+                            )
                             
-                            generator._generate_single_evaluator(tool_path)
-                            
-                            # Check if evaluator was actually created
-                            if evaluator_file.exists():
-                                # Also regenerate config to use the correct metrics from the evaluator
-                                try:
-                                    from agent_evolve.generate_openevolve_configs import OpenEvolveConfigGenerator
-                                    config_generator = OpenEvolveConfigGenerator(str(tool_path.parent))
-                                    config_generator._generate_single_config(tool_path, selected_tool)
-                                    st.info("🔄 Updated config with evaluator metrics")
-                                except Exception as config_e:
-                                    st.warning(f"⚠️ Config update failed: {config_e}")
-                                
-                                st.success("✅ Evaluator generated!")
-                                st.rerun()
+                            if success:
+                                # Check if evaluator was actually created
+                                evaluator_file = tool_path / "evaluator.py"
+                                if evaluator_file.exists():
+                                    # Also regenerate config to use the correct metrics from the evaluator
+                                    try:
+                                        from agent_evolve.generate_openevolve_configs import OpenEvolveConfigGenerator
+                                        config_generator = OpenEvolveConfigGenerator(str(tool_path.parent))
+                                        config_generator._generate_single_config(tool_path, selected_tool)
+                                        st.info("🔄 Updated config with evaluator metrics")
+                                    except Exception as config_e:
+                                        st.warning(f"⚠️ Config update failed: {config_e}")
+                                    
+                                    st.success("✅ Evaluator generated!")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Evaluator generation failed - file not created")
                             else:
-                                st.error("❌ Evaluator generation failed - file not created")
+                                st.error("❌ Failed to generate evaluator")
                     except Exception as e:
                         st.error(f"❌ Error: {e}")
                         import traceback

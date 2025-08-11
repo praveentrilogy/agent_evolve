@@ -3,6 +3,7 @@ import pandas as pd
 import json
 from pathlib import Path
 from typing import Dict, List
+from components.training_data_form import render_training_data_form
 
 @st.dialog("🤖 Improve Training Data with AI")
 def show_training_data_improvement_modal(selected_tool: str, current_training_data: List[Dict], evaluator_code: str):
@@ -100,12 +101,19 @@ For "Improve existing" or "Replace": Return the complete improved dataset as a J
 Return ONLY valid JSON, no explanations or markdown."""
                         
                         response = client.chat.completions.create(
-                            model="gpt-4o",
-                            messages=[{"role": "user", "content": training_prompt}],
-                            temperature=0.7  # Higher temperature for more diverse training data
+                            model="gpt-5",
+                            messages=[{"role": "user", "content": training_prompt}]
+                            # Note: gpt-5 only supports default temperature (1.0)
                         )
                         
-                        improved_data_text = response.choices[0].message.content.strip()
+                        if not response or not response.choices or len(response.choices) == 0:
+                            raise ValueError("OpenAI API returned empty response")
+                        
+                        improved_data_text = response.choices[0].message.content
+                        if not improved_data_text:
+                            raise ValueError("OpenAI API returned empty content")
+                        
+                        improved_data_text = improved_data_text.strip()
                         
                         # Clean up any markdown formatting
                         if improved_data_text.startswith('```json'):
@@ -159,12 +167,13 @@ def render_training_tab(tool_data, selected_tool):
     with col1:
         st.subheader("Training Data")
     with col2:
-        if st.button("🤖 Improve with AI", key=f"improve_training_top_{selected_tool}"):
-            # Get current training data and evaluator code
-            current_training_data = tool_data.get('training_data', [])
-            evaluator_code = tool_data.get('evaluator_code', '')
-            # Show the modal
-            show_training_data_improvement_modal(selected_tool, current_training_data, evaluator_code)
+        if tool_data.get('training_data'):
+            if st.button("🤖 Improve with AI", key=f"improve_training_top_{selected_tool}"):
+                # Get current training data and evaluator code
+                current_training_data = tool_data.get('training_data') or []
+                evaluator_code = tool_data.get('evaluator_code') or ''
+                # Show the modal
+                show_training_data_improvement_modal(selected_tool, current_training_data, evaluator_code)
     
     # Check if we should show training data diff view
     if st.session_state.get(f'show_training_diff_{selected_tool}', False):
@@ -268,5 +277,24 @@ def render_training_tab(tool_data, selected_tool):
                 st.metric("Columns", len(flattened_df.columns) - 1)  # -1 for Index column
         else:
             st.warning("Could not parse training data structure")
+        
+        # Add regeneration form for existing data
+        st.markdown("---")
+        render_training_data_form(
+            tool_data=tool_data,
+            selected_tool=selected_tool,
+            form_key_prefix="training_regen",
+            expanded=False,
+            show_regenerate=True
+        )
     else:
         st.warning("No training data available")
+        
+        # Show training data generation form
+        render_training_data_form(
+            tool_data=tool_data,
+            selected_tool=selected_tool,
+            form_key_prefix="training_gen",
+            expanded=True,
+            show_regenerate=False
+        )

@@ -100,7 +100,7 @@ def save_commented_evolve_target(target_info: Dict[str, Any], output_dir: str = 
     """Save a commented evolve target as a tool"""
     
     output_path = Path(output_dir)
-    tool_name = target_info['name'].lower()
+    tool_name = target_info['name']  # Preserve original case
     tool_dir = output_path / tool_name
     tool_dir.mkdir(parents=True, exist_ok=True)
     

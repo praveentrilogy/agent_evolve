@@ -26,7 +26,12 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 keywords = ["ai", "agent", "evolution", "machine-learning", "optimization"]
-dependencies = []
+dependencies = [
+    "openevolve",
+    "plotly",
+    "streamlit",
+    "streamlit-ace"
+]
 
 [project.optional-dependencies]
 dev = [

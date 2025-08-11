@@ -24,13 +24,19 @@ from langchain_core.messages import HumanMessage
 class TrainingDataGenerator:
     """Generates training data for agent tools using LLM"""
     
-    def __init__(self, model_name: str = "gpt-4o", num_samples: int = 10):
-        self.model = ChatOpenAI(
-            model=model_name, 
-            temperature=0.7,  # Higher temperature for more diverse data
-            max_tokens=4000,
-            timeout=60
-        )
+    def __init__(self, model_name: str = "gpt-4o", num_samples: int = 10, temperature: float = 1):
+        # Don't pass temperature for GPT-5 as it doesn't support custom values
+        model_args = {
+            "model": model_name,
+            # "max_tokens": 4000,
+            "timeout": 300
+        }
+        
+        # Only add temperature for models that support it (not GPT-5)
+        if model_name != "gpt-5":
+            model_args["temperature"] = temperature
+            
+        self.model = ChatOpenAI(**model_args)
         self.num_samples = num_samples
         self.tools_dir = Path("evolution/tools")
     
@@ -166,6 +172,16 @@ class TrainingDataGenerator:
         unique_variables = list(set(variables))
         print(f"  🔧 Found template variables: {unique_variables}")
         
+        # Check if this is a classification prompt (no variables, has classification keywords)
+        is_classification = (
+            len(unique_variables) == 0 and 
+            any(keyword in prompt_content.lower() for keyword in ['classify', 'categorize', 'determine', 'intent', 'category'])
+        )
+        
+        if is_classification:
+            print(f"  🎯 Detected classification prompt")
+            return self._generate_classification_training_data(prompt_content, training_data_file)
+        
         # Generate training data specific to this prompt type
         prompt = f"""Generate training data for testing this PROMPT TEMPLATE:
 
@@ -198,6 +214,36 @@ CRITICAL: DO NOT copy these example values. Generate your own diverse, realistic
 Each example should have DIFFERENT values for ALL variables.
 
 Generate {self.num_samples} training examples now with realistic values for variables: {unique_variables}
+Return ONLY a valid JSON array. No explanations, no markdown, just the JSON array."""
+
+        return self._execute_llm_generation(prompt, training_data_file)
+    
+    def _generate_classification_training_data(self, prompt_content: str, training_data_file: Path) -> bool:
+        """Generate training data for classification prompts"""
+        
+        prompt = f"""Generate training data for this CLASSIFICATION PROMPT:
+
+PROMPT:
+{prompt_content}
+
+TASK: Generate {self.num_samples} diverse test cases with realistic user inputs and their correct classifications.
+
+FORMAT: Each example must be a JSON object with "input" and "output" fields:
+{{
+    "input": "<realistic user message/query>",  
+    "output": "<correct category based on the prompt>"
+}}
+
+INSTRUCTIONS:
+1. Analyze the prompt to understand what categories it classifies into
+2. Create diverse, realistic user inputs that would trigger each category
+3. Distribute examples across all possible categories (not just one)
+4. Make inputs represent actual things users would say/ask
+5. Use the EXACT category names as specified in the prompt
+6. Include edge cases and borderline examples
+7. Vary the length, style, and complexity of inputs
+
+Generate {self.num_samples} training examples now.
 Return ONLY a valid JSON array. No explanations, no markdown, just the JSON array."""
 
         return self._execute_llm_generation(prompt, training_data_file)
@@ -259,10 +305,20 @@ Return ONLY a valid JSON array. No explanations, no markdown, just the JSON arra
     def _execute_llm_generation(self, prompt: str, training_data_file: Path) -> bool:
         """Execute LLM generation and save results"""
         try:
+            print(f"  🤖 Sending request to LLM...")
+            print(f"  📏 Prompt length: {len(prompt)} characters")
+            
             response = self.model.invoke([HumanMessage(content=prompt)])
+            print(f"  📤 LLM response: {response}")
+            
+            if not response or not response.content:
+                print(f"  ❌ Error: LLM returned empty response")
+                return False
             
             # Parse the response
             response_text = response.content.strip()
+            print(f"  📤 LLM response length: {len(response_text)} characters")
+            print(f"  📝 LLM response preview: {response_text[:200]}...")
             
             # Remove markdown code blocks if present
             if response_text.startswith('```json'):
@@ -274,6 +330,12 @@ Return ONLY a valid JSON array. No explanations, no markdown, just the JSON arra
                 response_text = response_text[:-3]
             
             response_text = response_text.strip()
+            
+            if not response_text:
+                print(f"  ❌ Error: Response text is empty after cleanup")
+                return False
+            
+            print(f"  🔧 Cleaned response length: {len(response_text)} characters")
             
             # Parse JSON
             training_data = json.loads(response_text)
@@ -302,10 +364,13 @@ Return ONLY a valid JSON array. No explanations, no markdown, just the JSON arra
             
         except json.JSONDecodeError as e:
             print(f"  ❌ Error parsing JSON response: {e}")
-            print(f"  Response: {response.content[:200]}...")
+            print(f"  📄 Full response: {response.content if 'response' in locals() else 'No response received'}")
             return False
         except Exception as e:
             print(f"  ❌ Error generating training data: {e}")
+            print(f"  🔍 Exception type: {type(e).__name__}")
+            import traceback
+            print(f"  📋 Traceback: {traceback.format_exc()}")
             return False
 
 
