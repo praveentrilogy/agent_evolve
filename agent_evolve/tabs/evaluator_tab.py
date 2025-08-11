@@ -126,7 +126,6 @@ Return ONLY Python code, no explanations or markdown."""
                         response = client.chat.completions.create(
                             model="gpt-5",
                             messages=[{"role": "user", "content": improvement_prompt}],
-                            temperature=0.3
                         )
                         
                         improved_code = response.choices[0].message.content.strip()

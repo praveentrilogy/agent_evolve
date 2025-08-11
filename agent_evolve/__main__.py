@@ -16,7 +16,7 @@ import os
 # from agent_evolve.safe_tracer import enable_safe_tracing, analyze_traces
 from agent_evolve.trace_tracer import enable_trace_tracing
 from agent_evolve.evolve_daemon import main as evolve_daemon_main
-from agent_evolve.evaluator_engine import generate_evaluator_cli
+from agent_evolve.evaluator_engine import generate_evaluator_cli, auto_generate_evaluator_for_extracted_tool
 from agent_evolve.extract_decorated_tools import DecoratedToolExtractor
 from agent_evolve.extract_commented_evolve import extract_commented_evolve_from_file
 import subprocess
@@ -262,6 +262,34 @@ def extract_decorated_tools_cli(path: str = '.', output_dir: str = '.agent_evolv
         import traceback
         traceback.print_exc()
 
+def generate_evaluator_openevolve_cli(target_name: str, db_path: str = 'data/graph.db', project_root: str = os.getcwd()):
+    """CLI function to generate an OpenEvolve-format evaluator for extracted tools."""
+    logger.info(f"Generating OpenEvolve evaluator for '{target_name}'...")
+    
+    # Look for the extracted tool directory
+    tool_dir_path = os.path.join(project_root, ".agent_evolve", target_name)
+    
+    if not os.path.exists(tool_dir_path):
+        logger.error(f"Error: Tool directory not found for '{target_name}' at {tool_dir_path}")
+        logger.error(f"Please run 'agent-evolve extract' first to extract the tool.")
+        return
+    
+    # Generate the evaluator using the OpenEvolve approach
+    success = auto_generate_evaluator_for_extracted_tool(
+        tool_dir_path=tool_dir_path,
+        project_root=project_root
+    )
+    
+    if success:
+        evaluator_path = os.path.join(tool_dir_path, "evaluator.py")
+        logger.info(f"✅ Successfully generated OpenEvolve evaluator at {evaluator_path}")
+        print(f"✅ Evaluator generated for '{target_name}'")
+        print(f"   Location: {evaluator_path}")
+        print(f"   Format: OpenEvolve (supports evaluate(program_path) signature)")
+    else:
+        logger.error(f"❌ Failed to generate evaluator for '{target_name}'")
+        print(f"❌ Failed to generate evaluator for '{target_name}'")
+
 def run_evolve_command(target_name: str, db_path: str = 'data/graph.db', project_root: str = os.getcwd(), checkpoint: int = 0, iterations: int = None):
     """Run OpenEvolve on a specific target (prompt or function)"""
     from agent_evolve.run_openevolve import run_openevolve_for_tool
@@ -449,7 +477,7 @@ def main():
     generate_evaluator_cli_parser.add_argument(
         "--project-root", type=str, default=os.getcwd(), help="Root directory of the project containing the target"
     )
-    generate_evaluator_cli_parser.set_defaults(func=generate_evaluator_cli)
+    generate_evaluator_cli_parser.set_defaults(func=generate_evaluator_openevolve_cli)
 
     # Sample Training Data command
     sample_training_data_parser = subparsers.add_parser(

@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 import os
 from datetime import datetime
-from agent_evolve.training_data_generator import generate_training_data 
+from agent_evolve.generate_training_data import TrainingDataGenerator 
 import logging
 
 # Configure logging
@@ -73,8 +73,11 @@ def process_queue(db_path, app_start_command):
         if is_git_repository(project_root):
             create_git_branch(f"evolve-{prompt_name}")
         
-        logger.info(f"Calling generate_test_data for prompt '{prompt_name}'")
-        generate_training_data(prompt_id, prompt_name, db_path)
+        logger.info(f"Calling generate_training_data for prompt '{prompt_name}'")
+        generator = TrainingDataGenerator()
+        # For daemon, we need to work with extracted tools directory
+        tools_directory = os.path.join(project_root, ".agent_evolve")
+        generator.generate_training_data(tools_directory, force=False, specific_tool=prompt_name)
         
         # Generate evaluator
         logger.info(f"Generating evaluator for prompt '{prompt_name}'")

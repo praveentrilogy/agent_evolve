@@ -101,6 +101,11 @@ def evaluate():
     # It should iterate through training_data, call the imported function/prompt,
     # perform subjective evaluation (using get_llm_response for non-deterministic outputs),
     # and collect metrics for each sample.
+    # The LLM should also ensure that the 'metrics' dictionary contains comparable numerical values.
+    
+    # IMPORTANT: For prompts, the target program is the content of 'evolve_target.py'.
+    # For code functions, the target program is the imported function itself (named '{item_name}').
+    # The LLM should use 'item_type' (which is passed as a template variable) to determine this.
     
     {evaluation_logic}
     
@@ -269,6 +274,132 @@ def generate_evaluation_logic(use_case):
         recommendations.append("Overall performance needs improvement.")
         """
 
+def auto_generate_evaluator_for_extracted_tool(tool_dir_path, project_root):
+    """Auto-generate evaluator for extracted tool using file-based approach"""
+    try:
+        tool_dir = Path(tool_dir_path)
+        item_name = tool_dir.name
+        
+        # Read metadata to determine item type
+        metadata_file = tool_dir / "metadata.json"
+        if not metadata_file.exists():
+            logger.error(f"Metadata file not found: {metadata_file}")
+            return False
+            
+        with open(metadata_file, 'r') as f:
+            metadata = json.load(f)
+        
+        item_type = 'prompt' if metadata.get('type') == 'prompt_template' else 'code'
+        
+        # Read the evolve_target.py to get content
+        evolve_target = tool_dir / "evolve_target.py"
+        if not evolve_target.exists():
+            logger.error(f"evolve_target.py not found: {evolve_target}")
+            return False
+            
+        with open(evolve_target, 'r') as f:
+            content = f.read()
+        
+        definition_location = metadata.get('original_file', '')
+        
+        # Generate evaluator.py
+        if item_type == 'prompt':
+            return create_prompt_evaluator_file_based(
+                evaluator_dir=str(tool_dir),
+                item_name=item_name,
+                item_type='template',
+                definition_location=definition_location,
+                content=content,
+                variables={}
+            )
+        else:
+            return create_code_evaluator_file_based(
+                evaluator_dir=str(tool_dir),
+                item_name=item_name,
+                item_type='function',
+                definition_location=definition_location,
+                content=content
+            )
+        
+    except Exception as e:
+        logger.error(f"Error auto-generating evaluator: {e}")
+        return False
+
+def create_prompt_evaluator_file_based(evaluator_dir, item_name, item_type, definition_location, content, variables):
+    """Create a prompt evaluator using file-based approach with OpenEvolve format"""
+    try:
+        # Use LLM to determine the best evaluator template
+        template_name = select_evaluator_template_with_llm(content, item_type, item_name)
+        
+        # Load and customize the selected template for file-based operation
+        evaluator_template = load_file_based_evaluator_template(template_name, item_name, item_type)
+        
+        # Write the evaluator file
+        evaluator_path = os.path.join(evaluator_dir, "evaluator.py")
+        with open(evaluator_path, 'w') as f:
+            f.write(evaluator_template)
+        
+        logger.info(f"Created {template_name} evaluator at {evaluator_path}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error creating file-based prompt evaluator: {e}")
+        return False
+
+def create_code_evaluator_file_based(evaluator_dir, item_name, item_type, definition_location, content):
+    """Create a code evaluator using file-based approach with OpenEvolve format"""
+    try:
+        # For code, determine the best evaluator template
+        template_name = select_evaluator_template_with_llm(content, item_type, item_name)
+        
+        # Load and customize the selected template for file-based operation
+        evaluator_template = load_file_based_evaluator_template(template_name, item_name, item_type)
+        
+        # Write the evaluator file
+        evaluator_path = os.path.join(evaluator_dir, "evaluator.py")
+        with open(evaluator_path, 'w') as f:
+            f.write(evaluator_template)
+        
+        logger.info(f"Created {template_name} evaluator at {evaluator_path}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error creating file-based code evaluator: {e}")
+        return False
+
+def load_file_based_evaluator_template(template_name, item_name, item_type):
+    """Load evaluator template customized for file-based operation with OpenEvolve format"""
+    try:
+        # Get the template file path
+        current_dir = os.path.dirname(__file__)
+        template_path = os.path.join(current_dir, "evaluator_templates", f"{template_name}_openevolve.py")
+        
+        # If OpenEvolve version doesn't exist, use regular version and adapt it
+        if not os.path.exists(template_path):
+            template_path = os.path.join(current_dir, "evaluator_templates", f"{template_name}.py")
+        
+        if not os.path.exists(template_path):
+            logger.warning(f"Template {template_name} not found, using default")
+            template_path = os.path.join(current_dir, "evaluator_templates", "default_evaluator.py")
+        
+        # Read the template
+        with open(template_path, 'r') as f:
+            template_content = f.read()
+        
+        # Use string.Template for safe substitution
+        template = Template(template_content)
+        formatted_template = template.safe_substitute(
+            item_name=item_name,
+            item_type=item_type
+        )
+        
+        return formatted_template
+        
+    except Exception as e:
+        logger.error(f"Error loading file-based template {template_name}: {e}")
+        # Return a basic fallback template
+        return create_openevolve_fallback_template(item_name, item_type)
+
 def auto_generate_evaluator_on_evolution(db_path, item_id, item_type, project_root):
     """Auto-generate evaluator.py when an item is marked for evolution"""
     try:
@@ -409,7 +540,7 @@ Respond with ONLY a JSON object:
   "reasoning": "Brief explanation of why this template is most suitable"
 }}"""
         logger.info(f"Sending LLM selection prompt for '{item_name}':\n{selection_prompt}")
-        result = get_llm_response_json(selection_prompt, temperature=0.0)
+        result = get_llm_response_json(selection_prompt)
         logger.info(f"LLM selection response for '{item_name}': {result}")
         
         if isinstance(result, dict) and "template" in result:

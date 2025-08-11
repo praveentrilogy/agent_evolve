@@ -166,6 +166,16 @@ class TrainingDataGenerator:
         unique_variables = list(set(variables))
         print(f"  🔧 Found template variables: {unique_variables}")
         
+        # Check if this is a classification prompt (no variables, has classification keywords)
+        is_classification = (
+            len(unique_variables) == 0 and 
+            any(keyword in prompt_content.lower() for keyword in ['classify', 'categorize', 'determine', 'intent', 'category'])
+        )
+        
+        if is_classification:
+            print(f"  🎯 Detected classification prompt")
+            return self._generate_classification_training_data(prompt_content, training_data_file)
+        
         # Generate training data specific to this prompt type
         prompt = f"""Generate training data for testing this PROMPT TEMPLATE:
 
@@ -198,6 +208,36 @@ CRITICAL: DO NOT copy these example values. Generate your own diverse, realistic
 Each example should have DIFFERENT values for ALL variables.
 
 Generate {self.num_samples} training examples now with realistic values for variables: {unique_variables}
+Return ONLY a valid JSON array. No explanations, no markdown, just the JSON array."""
+
+        return self._execute_llm_generation(prompt, training_data_file)
+    
+    def _generate_classification_training_data(self, prompt_content: str, training_data_file: Path) -> bool:
+        """Generate training data for classification prompts"""
+        
+        prompt = f"""Generate training data for this CLASSIFICATION PROMPT:
+
+PROMPT:
+{prompt_content}
+
+TASK: Generate {self.num_samples} diverse test cases with realistic user inputs and their correct classifications.
+
+FORMAT: Each example must be a JSON object with "input" and "output" fields:
+{{
+    "input": "<realistic user message/query>",  
+    "output": "<correct category based on the prompt>"
+}}
+
+INSTRUCTIONS:
+1. Analyze the prompt to understand what categories it classifies into
+2. Create diverse, realistic user inputs that would trigger each category
+3. Distribute examples across all possible categories (not just one)
+4. Make inputs represent actual things users would say/ask
+5. Use the EXACT category names as specified in the prompt
+6. Include edge cases and borderline examples
+7. Vary the length, style, and complexity of inputs
+
+Generate {self.num_samples} training examples now.
 Return ONLY a valid JSON array. No explanations, no markdown, just the JSON array."""
 
         return self._execute_llm_generation(prompt, training_data_file)

@@ -33,36 +33,38 @@ def render_overview_tab(tool_data, selected_tool):
             if st.button("🚀 Generate Evaluator", key=f"gen_eval_{selected_tool}"):
                 with st.spinner("🤖 Generating evaluator..."):
                     try:
-                        from agent_evolve.generate_evaluators import EvaluatorGenerator
+                        from agent_evolve.evaluator_engine import auto_generate_evaluator_for_extracted_tool
                         if not os.getenv('OPENAI_API_KEY'):
                             st.error("❌ OPENAI_API_KEY required")
                         else:
-                            generator = EvaluatorGenerator(model_name="gpt-5")
+                            # Use the new file-based approach with OpenEvolve format
                             tool_path = Path(tool_data['path'])
+                            project_root = str(tool_path.parent.parent)
                             
-                            # Force regeneration by removing existing evaluator
-                            evaluator_file = tool_path / "evaluator.py"
-                            if evaluator_file.exists():
-                                evaluator_file.unlink()
-                                st.info("🔄 Removing existing evaluator to regenerate...")
+                            success = auto_generate_evaluator_for_extracted_tool(
+                                tool_dir_path=str(tool_path),
+                                project_root=project_root
+                            )
                             
-                            generator._generate_single_evaluator(tool_path)
-                            
-                            # Check if evaluator was actually created
-                            if evaluator_file.exists():
-                                # Also regenerate config to use the correct metrics from the evaluator
-                                try:
-                                    from agent_evolve.generate_openevolve_configs import OpenEvolveConfigGenerator
-                                    config_generator = OpenEvolveConfigGenerator(str(tool_path.parent))
-                                    config_generator._generate_single_config(tool_path, selected_tool)
-                                    st.info("🔄 Updated config with evaluator metrics")
-                                except Exception as config_e:
-                                    st.warning(f"⚠️ Config update failed: {config_e}")
-                                
-                                st.success("✅ Evaluator generated!")
-                                st.rerun()
+                            if success:
+                                # Check if evaluator was actually created
+                                evaluator_file = tool_path / "evaluator.py"
+                                if evaluator_file.exists():
+                                    # Also regenerate config to use the correct metrics from the evaluator
+                                    try:
+                                        from agent_evolve.generate_openevolve_configs import OpenEvolveConfigGenerator
+                                        config_generator = OpenEvolveConfigGenerator(str(tool_path.parent))
+                                        config_generator._generate_single_config(tool_path, selected_tool)
+                                        st.info("🔄 Updated config with evaluator metrics")
+                                    except Exception as config_e:
+                                        st.warning(f"⚠️ Config update failed: {config_e}")
+                                    
+                                    st.success("✅ Evaluator generated!")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Evaluator generation failed - file not created")
                             else:
-                                st.error("❌ Evaluator generation failed - file not created")
+                                st.error("❌ Failed to generate evaluator")
                     except Exception as e:
                         st.error(f"❌ Error: {e}")
                         import traceback
