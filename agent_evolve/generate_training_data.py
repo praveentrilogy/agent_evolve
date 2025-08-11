@@ -24,10 +24,10 @@ from langchain_core.messages import HumanMessage
 class TrainingDataGenerator:
     """Generates training data for agent tools using LLM"""
     
-    def __init__(self, model_name: str = "gpt-5", num_samples: int = 10):
+    def __init__(self, model_name: str = "gpt-5", num_samples: int = 10, temperature: float = 1):
         self.model = ChatOpenAI(
             model=model_name, 
-            temperature=0.7,  # Higher temperature for more diverse data
+            temperature=temperature,  # Higher temperature for more diverse data
             max_tokens=4000,
             timeout=60
         )

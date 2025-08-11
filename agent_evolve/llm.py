@@ -56,19 +56,23 @@ def get_llm_response(prompt: str, model: str = "gpt-5", temperature: float = 0.0
 def get_llm_response_json(prompt: str, model: str = "gpt-5", temperature: float = 0.0):
     """Get a response from the LLM in JSON format with better error handling."""
         
-    if model == "gpt-5":
-        temperature = 1
-
     logger.info(f"Making LLM call with model={model}")
-
     logger.info(f"Prompt: {prompt}")
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": prompt}],
-        temperature=temperature,
-        response_format={"type": "json_object"},
-    )
+    # GPT-5 doesn't support custom temperature parameters
+    if model == "gpt-5":
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": prompt}],
+            response_format={"type": "json_object"},
+        )
+    else:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": prompt}],
+            temperature=temperature,
+            response_format={"type": "json_object"},
+        )
     
     # Check if response was truncated
     if response.choices[0].finish_reason == 'length':

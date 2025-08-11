@@ -17,11 +17,17 @@ import os
 from agent_evolve.trace_tracer import enable_trace_tracing
 from agent_evolve.evolve_daemon import main as evolve_daemon_main
 from agent_evolve.evaluator_engine import generate_evaluator_cli
+from agent_evolve.extract_decorated_tools import DecoratedToolExtractor
+from agent_evolve.extract_commented_evolve import extract_commented_evolve_from_file
 import subprocess
 import sqlite3
 import json
 import uuid
 from datetime import datetime
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 def sample_training_data_cli(db_path='data/graph.db', count=10):
     """Sample training data from trace_events table and create training data entries."""
@@ -207,6 +213,100 @@ def launch_dashboard(port=8501):
         print("Error: streamlit command not found")
         print("Please install Streamlit: pip install streamlit")
 
+def extract_decorated_tools_cli(path: str = '.', output_dir: str = '.agent_evolve'):
+    """Extract functions marked with @evolve decorator (both regular and commented)"""
+    try:
+        # First extract regular @evolve decorators
+        extractor = DecoratedToolExtractor(output_dir)
+        regular_tools = []
+        
+        if os.path.isfile(path):
+            tools = extractor.extract_from_file(path)
+            for tool in tools:
+                extractor.save_extracted_tool(tool)
+                regular_tools.append(tool['name'])
+        elif os.path.isdir(path):
+            extractor.extract_from_directory(path)
+            regular_tools = [tool['name'] for tool in extractor.extracted_tools]
+        else:
+            print(f"Error: {path} is not a valid file or directory")
+            return
+        
+        # Then extract commented #@evolve decorators
+        commented_tools = []
+        if os.path.isfile(path):
+            # Extract from single file
+            extracted = extract_commented_evolve_from_file(path, output_dir)
+            commented_tools.extend(extracted)
+        elif os.path.isdir(path):
+            # Extract from all Python files in directory
+            from pathlib import Path
+            for py_file in Path(path).rglob("*.py"):
+                extracted = extract_commented_evolve_from_file(str(py_file), output_dir)
+                commented_tools.extend(extracted)
+        
+        # Report results
+        total_tools = len(regular_tools) + len(commented_tools)
+        if total_tools > 0:
+            print(f"\n✅ Extracted {total_tools} tools:")
+            if regular_tools:
+                print(f"  - {len(regular_tools)} with @evolve decorators")
+            if commented_tools:
+                print(f"  - {len(commented_tools)} with #@evolve decorators")
+            print(f"\nExtracted tools saved to: {output_dir}")
+        else:
+            print(f"\n⚠️  No tools with @evolve or #@evolve decorators found in {path}")
+        
+    except Exception as e:
+        print(f"Error extracting tools: {e}")
+        import traceback
+        traceback.print_exc()
+
+def run_evolve_command(target_name: str, db_path: str = 'data/graph.db', project_root: str = os.getcwd(), checkpoint: int = 0, iterations: int = None):
+    """Run OpenEvolve on a specific target (prompt or function)"""
+    from agent_evolve.run_openevolve import run_openevolve_for_tool
+    
+    logger.info(f"Starting evolution for '{target_name}'...")
+    
+    # Determine the evaluator directory path
+    evaluator_dir = os.path.join(project_root, ".agent_evolve", target_name)
+    
+    if not os.path.exists(evaluator_dir):
+        logger.error(f"Error: No evaluator directory found for '{target_name}' at {evaluator_dir}")
+        logger.error(f"Please run 'agent-evolve generate-evaluator {target_name}' first.")
+        return
+    
+    # Check for required files
+    required_files = {
+        'evaluator.py': os.path.join(evaluator_dir, 'evaluator.py'),
+        'openevolve_config.yaml': os.path.join(evaluator_dir, 'openevolve_config.yaml'),
+        'evolve_target.py': os.path.join(evaluator_dir, 'evolve_target.py')
+    }
+    
+    missing_files = []
+    for file_name, file_path in required_files.items():
+        if not os.path.exists(file_path):
+            missing_files.append(file_name)
+    
+    if missing_files:
+        logger.error(f"Error: Missing required files in {evaluator_dir}:")
+        for file_name in missing_files:
+            logger.error(f"  - {file_name}")
+        logger.error(f"\nPlease ensure all required files are generated.")
+        return
+    
+    # Run OpenEvolve asynchronously
+    try:
+        success = asyncio.run(run_openevolve_for_tool(evaluator_dir, checkpoint, iterations))
+        if success:
+            logger.info(f"Evolution completed successfully for '{target_name}'!")
+        else:
+            logger.error(f"Evolution failed for '{target_name}'.")
+    except Exception as e:
+        logger.error(f"Error running evolution: {e}")
+        import traceback
+        traceback.print_exc()
+
 def main():
     parser = argparse.ArgumentParser(
         description="Agent Evolve CLI for managing AI agent evolution."
@@ -219,9 +319,12 @@ def main():
         "extract", help="Extract functions marked with @evolve decorator"
     )
     extract_parser.add_argument(
-        "path", type=str, help="Path to the code to extract from"
+        "--path", type=str, default=".", help="Path to the code to extract from"
     )
-    # extract_parser.set_defaults(func=extract_decorated_tools)
+    extract_parser.add_argument(
+        "--output-dir", type=str, default=".agent_evolve", help="Output directory for extracted tools"
+    )
+    extract_parser.set_defaults(func=extract_decorated_tools_cli)
 
     # Generate Training Data command
     generate_training_data_parser = subparsers.add_parser(
@@ -255,9 +358,21 @@ def main():
         "evolve", help="Run evolution optimization on a specific tool"
     )
     evolve_parser.add_argument(
-        "tool_name", type=str, help="Name of the tool/function to evolve"
+        "target_name", type=str, help="Name of the prompt or function to evolve (e.g., ORCHESTRATOR_PROMPT)"
     )
-    # evolve_parser.set_defaults(func=run_openevolve)
+    evolve_parser.add_argument(
+        "--db-path", type=str, default="data/graph.db", help="Path to the SQLite database file"
+    )
+    evolve_parser.add_argument(
+        "--project-root", type=str, default=os.getcwd(), help="Root directory of the project"
+    )
+    evolve_parser.add_argument(
+        "--checkpoint", type=int, default=0, help="Checkpoint number to resume from (0 for fresh start)"
+    )
+    evolve_parser.add_argument(
+        "--iterations", type=int, help="Number of iterations to run (overrides config file)"
+    )
+    evolve_parser.set_defaults(func=run_evolve_command)
 
     # Pipeline command
     pipeline_parser = subparsers.add_parser(

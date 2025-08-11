@@ -101,11 +101,18 @@ Return ONLY valid JSON, no explanations or markdown."""
                         
                         response = client.chat.completions.create(
                             model="gpt-5",
-                            messages=[{"role": "user", "content": training_prompt}],
-                            temperature=0.7  # Higher temperature for more diverse training data
+                            messages=[{"role": "user", "content": training_prompt}]
+                            # Note: gpt-5 only supports default temperature (1.0)
                         )
                         
-                        improved_data_text = response.choices[0].message.content.strip()
+                        if not response or not response.choices or len(response.choices) == 0:
+                            raise ValueError("OpenAI API returned empty response")
+                        
+                        improved_data_text = response.choices[0].message.content
+                        if not improved_data_text:
+                            raise ValueError("OpenAI API returned empty content")
+                        
+                        improved_data_text = improved_data_text.strip()
                         
                         # Clean up any markdown formatting
                         if improved_data_text.startswith('```json'):
@@ -161,8 +168,8 @@ def render_training_tab(tool_data, selected_tool):
     with col2:
         if st.button("🤖 Improve with AI", key=f"improve_training_top_{selected_tool}"):
             # Get current training data and evaluator code
-            current_training_data = tool_data.get('training_data', [])
-            evaluator_code = tool_data.get('evaluator_code', '')
+            current_training_data = tool_data.get('training_data') or []
+            evaluator_code = tool_data.get('evaluator_code') or ''
             # Show the modal
             show_training_data_improvement_modal(selected_tool, current_training_data, evaluator_code)
     
