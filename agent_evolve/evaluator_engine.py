@@ -66,9 +66,6 @@ from agent_evolve.llm import get_llm_response
 
 logger = logging.getLogger(__name__)
 
-# Add the project root to Python path
-sys.path.append(str(Path(__file__).parent.parent.parent))
-
 # Import the actual prompt/function to be evaluated
 {import_statement}
 
@@ -646,64 +643,46 @@ def get_import_statement_from_location(definition_location, item_name):
         return f"# TODO: Import {item_name} from {definition_location}"
     
     try:
-        # Handle format: "/full/path/to/file.py:ITEM_NAME"
-        if ':' in definition_location:
-            file_path = definition_location.split(':')[0]
-        else:
-            file_path = definition_location
-            
-        # Extract relative path from the full path
-        # Try to find a common project structure indicator and get relative path
-        relative_path = file_path
-        for marker in ['/src/', '/app/', '/lib/', '/backend/', '/frontend/', '/server/', '/client/']:
-            if marker in file_path:
-                # Include the marker directory in the path
-                marker_index = file_path.find(marker)
-                relative_path = file_path[marker_index + 1:]  # Skip the leading /
-                break
+        # The project root is assumed to be added to sys.path by the evaluator.py itself.
+        # We need to calculate the module path relative to the project root.
         
-        # If no marker found, use just the filename
-        if relative_path == file_path:
-            relative_path = os.path.basename(file_path)
-            
-        if relative_path.endswith('.py'):
-            # Get the directory containing the file
-            module_name = os.path.basename(relative_path)[:-3]  # Remove .py
-            
-            return f"""# Add project root to Python path for imports
-import sys
-from pathlib import Path
+        # First, determine the project root from the current working directory
+        # This logic is duplicated from find_project_root in the generated template,
+        # but it's necessary here to calculate the relative path.
+        current_script_dir = Path(__file__).parent
+        project_root = None
+        temp_dir = current_script_dir
+        while temp_dir != temp_dir.parent:
+            if any((temp_dir / marker).exists() for marker in [
+                'pyproject.toml', 'setup.py', 'requirements.txt', '.git', 
+                'src', 'Makefile', 'package.json', 'Cargo.toml', 'go.mod'
+            ]):
+                project_root = temp_dir
+                break
+            temp_dir = temp_dir.parent
+        if project_root is None:
+            project_root = current_script_dir.parent.parent # Fallback, similar to generated code
 
-# Dynamically find project root by looking for common markers
-def find_project_root():
-    current = Path(__file__).parent
-    while current != current.parent:
-        # Look for common project markers (generic, not project-specific)
-        if any((current / marker).exists() for marker in [
-            'pyproject.toml', 'setup.py', 'requirements.txt', '.git', 
-            'src', 'Makefile', 'package.json', 'Cargo.toml', 'go.mod'
-        ]):
-            return current
-        current = current.parent
-    return Path(__file__).parent.parent  # fallback
+        # Ensure definition_location is an absolute path
+        abs_definition_path = Path(definition_location).resolve()
 
-project_root = find_project_root()
-sys.path.insert(0, str(project_root))
+        # Calculate the relative path from the project root to the file
+        relative_file_path = os.path.relpath(str(abs_definition_path), str(project_root))
+        
+        # Convert file path to module import path (e.g., 'src/app/module.py' -> 'src.app.module')
+        module_import_path = str(Path(relative_file_path).with_suffix('')).replace(os.sep, '.')
+        
+        # If the module is directly in the project root, it might start with '.'
+        # Remove leading '.' if present
+        if module_import_path.startswith('.'):
+            module_import_path = module_import_path[1:]
 
-# Import the original function/prompt
-try:
-    from {relative_path[:-3].replace('/', '.').replace('\\', '.')} import {item_name}
-except ImportError as e:
-    # Alternative import method if module path doesn't work
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("{module_name}", project_root / "{relative_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    {item_name} = getattr(module, "{item_name}")"""
-        else:
-            return f"# TODO: Import {item_name} from {definition_location}"
+        # Construct the import statement
+        return f"from {module_import_path} import {item_name}"
+
     except Exception as e:
-        return f"# TODO: Import {item_name} from {definition_location} (Error: {e})"
+        logger.error(f"Error generating import statement for {item_name} from {definition_location}: {e}")
+        return f"# Error generating import statement for {item_name} from {definition_location}"
 
 import re
 

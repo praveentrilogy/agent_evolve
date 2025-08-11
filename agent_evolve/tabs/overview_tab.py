@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 from pathlib import Path
+from components.training_data_form import render_training_data_form
 
 def render_overview_tab(tool_data, selected_tool):
     """Render the Overview tab content"""
@@ -10,18 +11,24 @@ def render_overview_tab(tool_data, selected_tool):
     st.markdown("### 1️⃣ Training Data")
     if tool_data.get('training_data'):
         st.success(f"✅ Training data available ({len(tool_data['training_data'])} samples)")
+        # Show regenerate form
+        render_training_data_form(
+            tool_data=tool_data,
+            selected_tool=selected_tool,
+            form_key_prefix="overview_regen",
+            expanded=False,
+            show_regenerate=True
+        )
     else:
         st.warning("❌ No training data")
-        if st.button("🚀 Generate Training Data", key=f"gen_training_{selected_tool}"):
-            with st.spinner("🤖 Generating training data..."):
-                try:
-                    from agent_evolve.generate_training_data import TrainingDataGenerator
-                    generator = TrainingDataGenerator(num_samples=10)
-                    generator.generate_training_data(str(Path(tool_data['path']).parent), force=False, specific_tool=selected_tool)
-                    st.success("✅ Training data generated!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Error: {e}")
+        # Show initial generation form
+        render_training_data_form(
+            tool_data=tool_data,
+            selected_tool=selected_tool,
+            form_key_prefix="overview_gen",
+            expanded=True,
+            show_regenerate=False
+        )
     
     # Step 2: Evaluator
     st.markdown("### 2️⃣ Evaluator")
