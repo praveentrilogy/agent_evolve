@@ -236,12 +236,6 @@ We welcome contributions! Agent Evolve is designed to be extensible:
 
 MIT License - see [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
-
-- **Documentation**: Coming soon at [docs.agent-evolve.com]
-- **Issues**: Report bugs and request features on GitHub
-- **Community**: Join our Discord for discussions and support
-
 ---
 
 **Start evolving your AI agents today!** 🚀
